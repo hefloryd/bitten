@@ -7,8 +7,6 @@
 # you should have received as part of this distribution. The terms
 # are also available at http://bitten.cmlenz.net/wiki/License.
 
-"""Recipe commands for tools commonly used by Python projects."""
-
 import logging
 import os
 import re
@@ -35,14 +33,8 @@ def _python_path(ctxt):
         return python_path
     return sys.executable
 
-def distutils(ctxt, file_='setup.py', command='build'):
-    """Execute a C{distutils} command.
-    
-    @param ctxt: the build context
-    @type ctxt: an instance of L{bitten.recipe.Context}
-    @param file_: name of the file defining the distutils setup
-    @param command: the setup command to execute
-    """
+def distutils(ctxt, command='build', file_='setup.py'):
+    """Execute a `distutils` command."""
     cmdline = CommandLine(_python_path(ctxt), [ctxt.resolve(file_), command],
                           cwd=ctxt.basedir)
     log_elem = xmlio.Fragment()
@@ -69,21 +61,7 @@ def distutils(ctxt, file_='setup.py', command='build'):
         ctxt.error('distutils failed (%s)' % cmdline.returncode)
 
 def exec_(ctxt, file_=None, module=None, function=None, output=None, args=None):
-    """Execute a Python script.
-    
-    Either the C{file_} or the C{module} parameter must be provided. If
-    specified using the C{file_} parameter, the file must be inside the project
-    directory. If specified as a module, the module must either be resolvable
-    to a file, or the C{function} parameter must be provided
-    
-    @param ctxt: the build context
-    @type ctxt: an instance of L{bitten.recipe.Context}
-    @param file_: name of the script file to execute
-    @param module: name of the Python module to execute
-    @param function: name of the Python function to run
-    @param output: name of the file to which output should be written
-    @param args: extra arguments to pass to the script
-    """
+    """Execute a python script."""
     assert file_ or module, 'Either "file" or "module" attribute required'
     if function:
         assert module and not file_, '"module" attribute required for use of ' \
@@ -111,12 +89,7 @@ def exec_(ctxt, file_=None, module=None, function=None, output=None, args=None):
                     output=output, args=args)
 
 def pylint(ctxt, file_=None):
-    """Extract data from a C{pylint} run written to a file.
-    
-    @param ctxt: the build context
-    @type ctxt: an instance of L{bitten.recipe.Context}
-    @param file_: name of the file containing the Pylint output
-    """
+    """Extract data from a `pylint` run written to a file."""
     assert file_, 'Missing required attribute "file"'
     msg_re = re.compile(r'^(?P<file>.+):(?P<line>\d+): '
                         r'\[(?P<type>[A-Z]\d*)(?:, (?P<tag>[\w\.]+))?\] '
@@ -152,16 +125,7 @@ def pylint(ctxt, file_=None):
         log.warning('Error opening pylint results file (%s)', e)
 
 def trace(ctxt, summary=None, coverdir=None, include=None, exclude=None):
-    """Extract data from a C{trace.py} run.
-    
-    @param ctxt: the build context
-    @type ctxt: an instance of L{bitten.recipe.Context}
-    @param summary: path to the file containing the coverage summary
-    @param coverdir: name of the directory containing the per-module coverage
-        details
-    @param include: patterns of files or directories to include in the report
-    @param exclude: patterns of files or directories to exclude from the report
-    """
+    """Extract data from a `trace.py` run."""
     assert summary, 'Missing required attribute "summary"'
     assert coverdir, 'Missing required attribute "coverdir"'
 
@@ -176,46 +140,6 @@ def trace(ctxt, summary=None, coverdir=None, include=None, exclude=None):
             continue
         missing_files.append(filename)
     covered_modules = set()
-
-    def handle_file(elem, sourcefile, coverfile=None):
-        code_lines = set()
-        for lineno, linetype, line in loc.count(sourcefile):
-            if linetype == loc.CODE:
-                code_lines.add(lineno)
-        num_covered = 0
-        lines = []
-
-        if coverfile:
-            prev_hits = '0'
-            for idx, coverline in enumerate(coverfile):
-                match = coverage_line_re.search(coverline)
-                if match:
-                    hits = match.group(1)
-                    if hits: # Line covered
-                        if hits != '0':
-                            num_covered += 1
-                        lines.append(hits)
-                        prev_hits = hits
-                    elif coverline.startswith('>'): # Line not covered
-                        lines.append('0')
-                        prev_hits = '0'
-                    elif idx not in code_lines: # Not a code line
-                        lines.append('0')
-                        prev_hits = '0'
-                    else: # A code line not flagged by trace.py
-                        if prev_hits != '0':
-                            num_covered += 1
-                        lines.append(prev_hits)
-
-            module.append(xmlio.Element('line_hits')[' '.join(lines)])
-
-        num_lines = len(code_lines)
-        if num_lines:
-            percentage = int(round(num_covered * 100 / num_lines))
-        else:
-            percentage = 0
-        module.attr['percentage'] = percentage
-        module.attr['lines'] = num_lines
 
     try:
         summary_file = open(ctxt.resolve(summary), 'r')
@@ -240,23 +164,36 @@ def trace(ctxt, summary=None, coverdir=None, include=None, exclude=None):
                     missing_files.remove(filename)
                     covered_modules.add(modname)
                     module = xmlio.Element('coverage', name=modname,
-                                           file=filename.replace(os.sep, '/'))
-                    sourcefile = file(ctxt.resolve(filename))
-                    try:
-                        coverpath = ctxt.resolve(coverdir, modname + '.cover')
-                        if os.path.isfile(coverpath):
-                            coverfile = file(coverpath, 'r')
-                        else:
-                            log.warning('No coverage file for module %s at %s',
-                                        modname, coverpath)
-                            coverfile = None
+                                           file=filename.replace(os.sep, '/'),
+                                           percentage=int(match.group(2)))
+                    coverage_path = ctxt.resolve(coverdir, modname + '.cover')
+                    if os.path.exists(coverage_path):
+                        coverage_file = open(coverage_path, 'r')
+                        lines = []
                         try:
-                            handle_file(module, sourcefile, coverfile)
+                            for coverage_line in coverage_file:
+                                match = coverage_line_re.search(coverage_line)
+                                if match:
+                                    hits = match.group(1)
+                                    if hits:
+                                        lines.append(hits)
+                                    else:
+                                        lines.append('0')
                         finally:
-                            if coverfile:
-                                coverfile.close()
-                    finally:
-                        sourcefile.close()
+                            coverage_file.close()
+                        module.attr['lines'] = len(lines)
+                        module.append(xmlio.Element('line_hits')[
+                            ' '.join(lines)
+                        ])
+                    else:
+                        log.warning('No coverage file for module %s at %s',
+                                    modname, coverage_path)
+
+                        # Estimate total number of lines from covered lines and
+                        # percentage
+                        lines = int(match.group(1))
+                        percentage = int(match.group(2))
+                        module.attr['lines'] = lines * 100 / percentage
                     coverage.append(module)
 
             for filename in missing_files:
@@ -270,7 +207,11 @@ def trace(ctxt, summary=None, coverdir=None, include=None, exclude=None):
                 filepath = ctxt.resolve(filename)
                 fileobj = file(filepath, 'r')
                 try:
-                    handle_file(module, fileobj)
+                    lines = 0
+                    for lineno, linetype, line in loc.count(fileobj):
+                        if linetype == loc.CODE:
+                            lines += 1
+                    module.attr['lines'] = lines
                 finally:
                     fileobj.close()
                 coverage.append(module)
@@ -282,12 +223,7 @@ def trace(ctxt, summary=None, coverdir=None, include=None, exclude=None):
         log.warning('Error opening coverage summary file (%s)', e)
 
 def unittest(ctxt, file_=None):
-    """Extract data from a unittest results file in XML format.
-    
-    @param ctxt: the build context
-    @type ctxt: an instance of L{bitten.recipe.Context}
-    @param file_: name of the file containing the test results
-    """
+    """Extract data from a unittest results file in XML format."""
     assert file_, 'Missing required attribute "file"'
 
     try:
