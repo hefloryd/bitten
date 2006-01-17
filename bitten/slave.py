@@ -7,8 +7,7 @@
 # you should have received as part of this distribution. The terms
 # are also available at http://bitten.cmlenz.net/wiki/License.
 
-"""Implementation of the build slave."""
-
+from ConfigParser import ConfigParser
 from datetime import datetime
 import logging
 import os
@@ -19,33 +18,20 @@ except NameError:
     from sets import Set as set
 import shutil
 import tempfile
-import tarfile
 
 from bitten.build import BuildError
 from bitten.build.config import Configuration
 from bitten.recipe import Recipe, InvalidRecipeError
-from bitten.util import beep, xmlio
+from bitten.util import archive, beep, xmlio
 
 log = logging.getLogger('bitten.slave')
 
 
 class Slave(beep.Initiator):
-    """BEEP initiator implementation for the build slave."""
+    """Build slave."""
 
     def __init__(self, ip, port, name=None, config=None, dry_run=False,
                  work_dir=None, keep_files=False):
-        """Create the build slave instance.
-        
-        @param ip: Host name or IP address of the build master to connect to
-        @param port: TCP port number of the build master to connect to
-        @param name: The name with which this slave should identify itself
-        @param config: The slave configuration
-        @param dry_run: Whether the build outcome should not be reported back
-            to the master
-        @param work_dir: The working directory to use for build execution
-        @param keep_files: Whether files and directories created for build
-            execution should be kept when done
-        """
         beep.Initiator.__init__(self, ip, port)
         self.name = name
         self.config = config
@@ -58,11 +44,6 @@ class Slave(beep.Initiator):
         self.keep_files = keep_files
 
     def greeting_received(self, profiles):
-        """Start a channel for the build orchestration profile, if advertised
-        by the peer.
-        
-        Otherwise, terminate the session.
-        """
         if OrchestrationProfileHandler.URI not in profiles:
             err = 'Peer does not support the Bitten orchestration profile'
             log.error(err)
@@ -78,7 +59,7 @@ class OrchestrationProfileHandler(beep.ProfileHandler):
 
     def handle_connect(self):
         """Register with the build master."""
-        self.build_xml = None
+        self.recipe_xml = None
 
         def handle_reply(cmd, msgno, ansno, payload):
             if cmd == 'ERR':
@@ -113,88 +94,68 @@ class OrchestrationProfileHandler(beep.ProfileHandler):
         self.channel.send_msg(beep.Payload(xml), handle_reply)
 
     def handle_msg(self, msgno, payload):
-        """Handle either a build initiation or the transmission of a snapshot
-        archive.
-        
-        @param msgno: The identifier of the BEEP message
-        @param payload: The payload of the message
-        """
         if payload.content_type == beep.BEEP_XML:
             elem = xmlio.parse(payload.body)
             if elem.name == 'build':
+                self.recipe_xml = elem
                 # Received a build request
-                self.build_xml = elem
-                xml = xmlio.Element('proceed')
+                xml = xmlio.Element('proceed')[
+                    xmlio.Element('accept', type='application/tar',
+                                  encoding='bzip2'),
+                    xmlio.Element('accept', type='application/tar',
+                                  encoding='gzip'),
+                    xmlio.Element('accept', type='application/zip')
+                ]
                 self.channel.send_rpy(msgno, beep.Payload(xml))
 
-        elif payload.content_type == 'application/tar' and \
-             payload.content_encoding == 'bzip2':
+        elif payload.content_type in ('application/tar', 'application/zip'):
             # Received snapshot archive for build
-            project_name = self.build_xml.attr.get('project', 'default')
-            project_dir = os.path.join(self.session.work_dir, project_name)
-            if not os.path.exists(project_dir):
-                os.mkdir(project_dir)
-
             archive_name = payload.content_disposition
             if not archive_name:
-                archive_name = 'snapshot.tar.bz2'
-            archive_path = os.path.join(project_dir, archive_name)
+                if payload.content_type == 'application/tar':
+                    if payload.content_encoding == 'gzip':
+                        archive_name = 'snapshot.tar.gz'
+                    elif payload.content_encoding == 'bzip2':
+                        archive_name = 'snapshot.tar.bz2'
+                    elif not payload.content_encoding:
+                        archive_name = 'snapshot.tar'
+                else:
+                    archive_name = 'snapshot.zip'
+            archive_path = os.path.join(self.session.work_dir, archive_name)
 
             archive_file = file(archive_path, 'wb')
             try:
                 shutil.copyfileobj(payload.body, archive_file)
             finally:
                 archive_file.close()
-            basedir = self.unpack_snapshot(project_dir, archive_name)
+            os.chmod(archive_path, 0400)
+
+            log.debug('Received snapshot archive: %s', archive_path)
+
+            # Unpack the archive
+            try:
+                prefix = archive.unpack(archive_path, self.session.work_dir)
+                path = os.path.join(self.session.work_dir, prefix)
+                os.chmod(path, 0700)
+                log.debug('Unpacked snapshot to %s' % path)
+            except archive.Error, e:
+                xml = xmlio.Element('error', code=550)[
+                    'Could not unpack archive (%s)' % e
+                ]
+                self.channel.send_err(msgno, beep.Payload(xml))
+                log.error('Could not unpack archive %s: %s', archive_path, e,
+                          exc_info=True)
+                return
 
             try:
-                recipe = Recipe(self.build_xml, basedir, self.config)
+                recipe = Recipe(self.recipe_xml, path, self.config)
                 self.execute_build(msgno, recipe)
             finally:
                 if not self.session.keep_files:
-                    shutil.rmtree(basedir)
+                    shutil.rmtree(path)
                     os.remove(archive_path)
 
-    def unpack_snapshot(self, project_dir, archive_name):
-        """Unpack a snapshot archive.
-        
-        @param project_dir: Base directory for builds for the project
-        @param archive_name: Name of the archive file
-        """
-        path = os.path.join(project_dir, archive_name)
-        log.debug('Received snapshot archive: %s', path)
-        try:
-            tar_file = tarfile.open(path, 'r:bz2')
-            tar_file.chown = lambda *args: None # Don't chown extracted members
-            try:
-                names = []
-                for tarinfo in tar_file:
-                    if tarinfo.isfile() or tarinfo.isdir():
-                        if tarinfo.name.startswith('/') or '..' in tarinfo.name:
-                            continue
-                        names.append(tarinfo.name)
-                        tar_file.extract(tarinfo, project_dir)
-            finally:
-                tar_file.close()
-
-            basedir = os.path.join(project_dir,  os.path.commonprefix(names))
-            log.debug('Unpacked snapshot to %s' % basedir)
-            return basedir
-
-        except tarfile.TarError, e:
-            log.error('Could not unpack archive %s: %s', path, e, exc_info=True)
-            raise beep.ProtocolError(550, 'Could not unpack archive (%s)' % e)
-
     def execute_build(self, msgno, recipe):
-        """Execute a build.
-        
-        Execute every step in the recipe, and report the outcome of each
-        step back to the server using an ANS message.
-        
-        @param msgno: The identifier of the snapshot transmission message
-        @param recipe: The recipe object
-        @type recipe: an instance of L{bitten.recipe.Recipe}
-        """
         log.info('Building in directory %s', recipe.ctxt.basedir)
         try:
             if not self.session.dry_run:
@@ -274,7 +235,6 @@ class OrchestrationProfileHandler(beep.ProfileHandler):
 
 
 def main():
-    """Main entry point for running the build slave."""
     from bitten import __version__ as VERSION
     from optparse import OptionParser
 

@@ -7,20 +7,21 @@
 # you should have received as part of this distribution. The terms
 # are also available at http://bitten.cmlenz.net/wiki/License.
 
+
 """Minimal implementation of the BEEP protocol (IETF RFC 3080) based on the
 `asyncore` module.
 
 Current limitations:
- - No support for the TLS and SASL profiles.
- - No support for mapping frames (SEQ frames for TCP mapping).
- - No localization support (xml:lang attribute).
+ * No support for the TSL and SASL profiles.
+ * No support for mapping frames (SEQ frames for TCP mapping).
+ * No localization support (xml:lang attribute).
 """
 
 import asynchat
 import asyncore
+import bisect
 from datetime import datetime, timedelta
 import email
-from heapq import heappop, heappush
 import logging
 import socket
 try:
@@ -65,15 +66,6 @@ class ProtocolError(Exception):
     }
 
     def __init__(self, code, message=None):
-        """Create the error.
-        
-        A numeric error code must be provided as the first parameter. A message
-        can be provided; if it is omitted, a standard error message will be
-        used in case the error code is known.
-        
-        @param code: The error code
-        @param message: An error message (optional)
-        """
         if message is None:
             message = ProtocolError._default_messages.get(code)
         Exception.__init__(self, 'BEEP error %d (%s)' % (code, message))
@@ -82,12 +74,6 @@ class ProtocolError(Exception):
         self.local = True
 
     def from_xml(cls, xml):
-        """Create an error object from the given XML element.
-        
-        @param xml: The XML element representing the error
-        @type xml: An instance of L{bitten.util.xmlio.ParsedElement}
-        @return: The created C{ProtocolError} object
-        """
         elem = xmlio.parse(xml)
         obj = cls(int(elem.attr['code']), elem.gettext())
         obj.local = False
@@ -95,10 +81,6 @@ class ProtocolError(Exception):
     from_xml = classmethod(from_xml)
 
     def to_xml(self):
-        """Create an XML representation of the error.
-        
-        @return: The created XML element
-        """
         return xmlio.Element('error', code=self.code)[self.message]
 
 
@@ -106,48 +88,7 @@ class TerminateSession(Exception):
     """Signal termination of a session."""
 
 
-class EventLoop(object):
-    """An `asyncore` event loop.
-    
-    This will interrupt the normal asyncore loop at configurable intervals, and
-    execute scheduled callbacks.
-    """
-
-    def __init__(self):
-        """Create the event loop."""
-        self.eventqueue = []
-
-    def run(self, timeout=15.0, granularity=5):
-        """Start the event loop."""
-        granularity = timedelta(seconds=granularity)
-        socket_map = asyncore.socket_map
-        last_event_check = datetime.min
-        while socket_map:
-            now = datetime.now()
-            if now - last_event_check >= granularity:
-                last_event_check = now
-                while self.eventqueue:
-                    when, callback = heappop(self.eventqueue)
-                    if now < when:
-                        heappush(self.eventqueue, (when, callback))
-                        break
-                    callback()
-            asyncore.poll(timeout)
-
-    def schedule(self, delta, callback):
-        """Schedule a function to be called.
-        
-        @param delta: The number of seconds after which the callback should be
-                      invoked
-        @param callback: The function to call
-        """
-        when = datetime.now() + timedelta(seconds=delta)
-        log.debug('Scheduling event %s to run at %s', callback.__name__, when)
-
-        heappush(self.eventqueue, (when, callback))
-
-
-class Listener(EventLoop, asyncore.dispatcher):
+class Listener(asyncore.dispatcher):
     """BEEP peer in the listener role.
     
     This peer opens a socket for listening to incoming connections. For each
@@ -155,21 +96,13 @@ class Listener(EventLoop, asyncore.dispatcher):
     communication with the connected peer.
     """
     def __init__(self, ip, port):
-        """Create the listener.
-        
-        @param ip: The IP address or host name to bind to
-        @type ip: a string
-        @param port: The TCP port number to bind to
-        @type port: an int
-        """
-        EventLoop.__init__(self)
         asyncore.dispatcher.__init__(self)
         self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
         self.set_reuse_addr()
-        self.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         self.bind((ip, port))
         self.sessions = []
         self.profiles = {} # Mapping from URIs to ProfileHandler sub-classes
+        self.eventqueue = []
         log.debug('Listening to connections on %s:%d', ip, port)
         self.listen(5)
 
@@ -191,13 +124,48 @@ class Listener(EventLoop, asyncore.dispatcher):
         self.sessions.append(Session(self, conn, (ip, port), self.profiles,
                                      first_channelno=2))
 
+    def run(self, timeout=15.0, granularity=5):
+        """Start listening to incoming connections."""
+        granularity = timedelta(seconds=granularity)
+        socket_map = asyncore.socket_map
+        last_event_check = datetime.min
+        while socket_map:
+            now = datetime.now()
+            if now - last_event_check >= granularity:
+                last_event_check = now
+                fired = []
+                i = j = 0
+                while i < len(self.eventqueue):
+                    when, callback = self.eventqueue[i]
+                    if now >= when:
+                        fired.append(callback)
+                        j = i + 1
+                    else:
+                        break
+                    i = i + 1
+                if fired:
+                    self.eventqueue = self.eventqueue[j:]
+                    for callback in fired:
+                        callback(now)
+            asyncore.poll(timeout)
+
+    def schedule(self, delta, callback):
+        """Schedule a function to be called.
+        
+        @param delta: The number of seconds after which the callback should be
+                      invoked
+        @param callback: The function to call
+        """
+        when = datetime.now() + timedelta(seconds=delta)
+        log.debug('Scheduling event %s to run at %s', callback.__name__, when)
+
+        bisect.insort(self.eventqueue, (when, callback))
+
     def quit(self):
-        """Shutdown the listener, attempting to gracefully quit all active BEEP
-        sessions by first closing their respective channels."""
         if not self.sessions:
             self.close()
             return
-        def terminate_next_session():
+        def terminate_next_session(when=None):
             session = self.sessions[-1]
             def handle_ok():
                 if self.sessions:
@@ -207,7 +175,7 @@ class Listener(EventLoop, asyncore.dispatcher):
             def handle_error(channelno, code, message):
                 log.error('Failed to close channel %d', channelno)
             log.debug('Closing session with %s', session.addr)
-            session.terminate(handle_ok=handle_ok, handle_error=handle_error)
+            session.terminate(handle_ok=handle_ok)
         self.schedule(0, terminate_next_session)
         self.run(.5)
 
@@ -230,9 +198,6 @@ class Session(asynchat.async_chat):
                                 peer in the listening role, 1 for initiators
         """
         asynchat.async_chat.__init__(self, conn)
-        if conn:
-            self.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-
         self.listener = listener
         self.addr = addr
         self.set_terminator('\r\n')
@@ -264,7 +229,7 @@ class Session(asynchat.async_chat):
         """Called by asyncore when an exception is raised."""
         cls, value = sys.exc_info()[:2]
         if cls is TerminateSession:
-            raise
+            raise cls, value
         log.exception(value)
 
     def collect_incoming_data(self, data):
@@ -345,10 +310,10 @@ class Session(asynchat.async_chat):
                                                              seqno, ansno,
                                                              payload)
                 except ProtocolError, e:
-                    log.error(e)
-                    if e.local and msgno is not None:
-                        self.channels[channel].send_err(msgno,
-                                                        Payload(e.to_xml()))
+                    log.exception(e)
+                    if e.local and channel == 0 and msgno is not None:
+                        xml = xmlio.Element('error', code=550)[e]
+                        self.channels[channel].send_err(msgno, Payload(xml))
 
         except (AssertionError, IndexError, TypeError, ValueError), e:
             log.error('Malformed frame', exc_info=True)
@@ -376,7 +341,7 @@ class Session(asynchat.async_chat):
         close_next_channel()
 
 
-class Initiator(EventLoop, Session):
+class Initiator(Session):
     """Root class for BEEP peers in the initiating role."""
 
     def __init__(self, ip, port, profiles=None):
@@ -389,13 +354,11 @@ class Initiator(EventLoop, Session):
                          `ProfileHandler` sub-class that will be instantiated to
                          handle the communication for that profile
         """
-        EventLoop.__init__(self)
         Session.__init__(self, profiles=profiles or {})
         self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
         log.debug('Connecting to %s:%s', ip, port)
-        if ip and port:
-            self.addr = (ip, port)
-            self.connect(self.addr)
+        self.addr = (ip, port)
+        self.connect(self.addr)
 
     def handle_connect(self):
         """Called by asyncore when the connection is established."""
@@ -407,10 +370,19 @@ class Initiator(EventLoop, Session):
         @param profiles: A list of URIs of the profiles the peer claims to
                          support.
         """
+        pass
+
+    def run(self):
+        """Start this peer, which will try to connect to the server and send a
+        greeting.
+        """
+        try:
+            asyncore.loop()
+        except TerminateSession:
+            log.info('Terminating session')
+            self.terminate()
 
     def quit(self):
-        """Stops the build slave, attempting to gracefully quit the session by
-        closing all active channels."""
         self.terminate()
         asyncore.loop(timeout=10)
 
@@ -421,9 +393,9 @@ class Channel(object):
     def __init__(self, session, channelno, profile_cls):
         """Create the channel.
 
-        @param session: The L{Session} object that the channel belongs to
-        @param channelno: The channel number
-        @param profile_cls: The associated L{ProfileHandler} class
+        @param session The `Session` object that the channel belongs to
+        @param channelno The channel number
+        @param profile The associated `ProfileHandler` class
         """
         self.session = session
         self.channelno = channelno
@@ -450,9 +422,9 @@ class Channel(object):
         """Process a TCP mapping frame (SEQ).
         
         @param ackno: the value of the next sequence number that the sender is
-            expecting to receive on this channel
+                      expecting to receive on this channel
         @param window: window size, the number of payload octets per frame that
-            the sender is expecting to receive on this channel
+                       the sender is expecting to receive on this channel
         """
         self.windowsize = window
 
@@ -586,44 +558,24 @@ class ProfileHandler(object):
     def handle_disconnect(self):
         """Called when the channel this profile is associated with is closed."""
 
-    def handle_msg(self, msgno, payload):
-        """Handle a MSG frame.
-        
-        @param msgno: The message identifier
-        @param payload: The C{Payload} of the message
-        """
+    def handle_msg(self, msgno, message):
+        """Handle a MSG frame."""
         raise NotImplementedError
 
-    def handle_rpy(self, msgno, payload):
-        """Handle a RPY frame.
-        
-        @param msgno: The identifier of the referenced message
-        @param payload: The C{Payload} of the message
-        """
+    def handle_rpy(self, msgno, message):
+        """Handle a RPY frame."""
         pass
 
-    def handle_err(self, msgno, payload):
-        """Handle an ERR frame.
-        
-        @param msgno: The identifier of the referenced message
-        @param payload: The C{Payload} of the message
-        """
+    def handle_err(self, msgno, message):
+        """Handle an ERR frame."""
         pass
 
-    def handle_ans(self, msgno, ansno, payload):
-        """Handle an ANS frame.
-        
-        @param msgno: The identifier of the referenced message
-        @param ansno: The answer number
-        @param payload: The C{Payload} of the message
-        """
+    def handle_ans(self, msgno, ansno, message):
+        """Handle an ANS frame."""
         pass
 
     def handle_nul(self, msgno):
-        """Handle a NUL frame.
-        
-        @param msgno: The identifier of the referenced message
-        """
+        """Handle a NUL frame."""
         pass
 
 
@@ -639,10 +591,10 @@ class ManagementProfileHandler(ProfileHandler):
         ]
         self.channel.send_rpy(0, Payload(xml))
 
-    def handle_msg(self, msgno, payload):
+    def handle_msg(self, msgno, message):
         """Handle an incoming message."""
-        assert payload and payload.content_type == BEEP_XML
-        elem = xmlio.parse(payload.body)
+        assert message and message.content_type == BEEP_XML
+        elem = xmlio.parse(message.body)
 
         if elem.name == 'start':
             channelno = int(elem.attr['number'])
@@ -675,27 +627,27 @@ class ManagementProfileHandler(ProfileHandler):
             if not self.session.channels:
                 self.session.close()
 
-    def handle_rpy(self, msgno, payload):
+    def handle_rpy(self, msgno, message):
         """Handle a positive reply."""
-        if payload.content_type == BEEP_XML:
-            elem = xmlio.parse(payload.body)
+        if message.content_type == BEEP_XML:
+            elem = xmlio.parse(message.body)
             if elem.name == 'greeting':
                 if isinstance(self.session, Initiator):
                     profiles = [p.attr['uri'] for p in elem.children('profile')]
                     self.session.greeting_received(profiles)
 
-    def handle_err(self, msgno, payload):
+    def handle_err(self, msgno, message):
         """Handle a negative reply."""
         # Probably an error on connect, because other errors should get handled
         # by the corresponding callbacks
         # TODO: Terminate the session, I guess
-        if payload.content_type == BEEP_XML:
-            raise ProtocolError.from_xml(payload.body)
+        if message.content_type == BEEP_XML:
+            raise ProtocolError.from_xml(message.body)
 
     def send_close(self, channelno=0, code=200, handle_ok=None,
                    handle_error=None):
         """Send a request to close a channel to the peer."""
-        def handle_reply(cmd, msgno, ansno, payload):
+        def handle_reply(cmd, msgno, ansno, message):
             if cmd == 'RPY':
                 log.debug('Channel %d closed', channelno)
                 self.session.channels[channelno].close()
@@ -704,7 +656,7 @@ class ManagementProfileHandler(ProfileHandler):
                 if handle_ok is not None:
                     handle_ok()
             elif cmd == 'ERR':
-                error = ProtocolError.from_xml(payload.body)
+                error = ProtocolError.from_xml(message.body)
                 log.debug('Peer refused to start channel %d: %s (%d)',
                           channelno, error.message, error.code)
                 if handle_error is not None:
@@ -717,17 +669,18 @@ class ManagementProfileHandler(ProfileHandler):
     def send_start(self, profiles, handle_ok=None, handle_error=None):
         """Send a request to start a new channel to the peer.
         
-        @param profiles: A list of profiles to request for the channel, each
-            element being an instance of a L{ProfileHandler} subclass
-        @param handle_ok: An optional callback function that will be invoked
-            when the channel has been successfully started
-        @param handle_error: An optional callback function that will be invoked
-            when the peer refuses to start the channel
+        @param profiles A list of profiles to request for the channel, each
+                        element being an instance of a `ProfileHandler`
+                        sub-class
+        @param handle_ok An optional callback function that will be invoked when
+                         the channel has been successfully started
+        @param handle_error An optional callback function that will be invoked
+                            when the peer refuses to start the channel
         """
         channelno = self.session.channelno.next()
-        def handle_reply(cmd, msgno, ansno, payload):
+        def handle_reply(cmd, msgno, ansno, message):
             if cmd == 'RPY':
-                elem = xmlio.parse(payload.body)
+                elem = xmlio.parse(message.body)
                 for cls in [p for p in profiles if p.URI == elem.attr['uri']]:
                     log.debug('Channel %d started with profile %s', channelno,
                               elem.attr['uri'])
@@ -737,7 +690,7 @@ class ManagementProfileHandler(ProfileHandler):
                 if handle_ok is not None:
                     handle_ok(channelno, elem.attr['uri'])
             elif cmd == 'ERR':
-                elem = xmlio.parse(payload.body)
+                elem = xmlio.parse(message.body)
                 text = elem.gettext()
                 code = int(elem.attr['code'])
                 log.debug('Peer refused to start channel %d: %s (%d)',
@@ -758,17 +711,7 @@ class Payload(object):
 
     def __init__(self, data=None, content_type=BEEP_XML,
                  content_disposition=None, content_encoding=None):
-        """Initialize the payload object.
-        
-        @param data: The body of the MIME message. This can be either:
-            - a string,
-            - a file-like object providing a C{read()} function,
-            - an XML element, or
-            - C{None}
-        @param content_type: the MIME type of the payload
-        @param content_disposition: the filename for disposition of the data
-        @param content_encoding: the encoding of the data
-        """
+        """Initialize the payload."""
         self._hdr_buf = None
         self.content_type = content_type
         self.content_disposition = content_disposition
@@ -776,7 +719,7 @@ class Payload(object):
 
         if data is None:
             data = ''
-        if isinstance(data, (xmlio.Element, xmlio.ParsedElement)):
+        if isinstance(data, xmlio.Element):
             self.body = StringIO(str(data))
         elif isinstance(data, basestring):
             self.body = StringIO(data)
@@ -786,10 +729,6 @@ class Payload(object):
             self.body = data
 
     def read(self, size=None):
-        """Return the specified range of the MIME message.
-        
-        @param size: the number of bytes to read
-        """
         if self._hdr_buf is None:
             hdrs = []
             if self.content_type:
@@ -819,10 +758,6 @@ class Payload(object):
         return ret_buf
 
     def parse(cls, string):
-        """Create a C{Payload} object from the given string data.
-        
-        @param string: The string containing the MIME message.
-        """
         message = email.message_from_string(string)
         content_type = message.get('Content-Type')
         content_disposition = message.get('Content-Disposition')
@@ -834,17 +769,16 @@ class Payload(object):
 
 class FrameProducer(object):
     """Internal class that emits the frames of a BEEP message, based on the
-    C{asynchat} C{push_with_producer()} protocol.
+    `asynchat` `push_with_producer()` protocol.
     """
     def __init__(self, channel, cmd, msgno, ansno=None, payload=None):
         """Initialize the frame producer.
         
-        @param channel: The channel the message is to be sent on
-        @param cmd: The BEEP command/keyword (MSG, RPY, ERR, ANS or NUL)
-        @param msgno: The message number
-        @param ansno: The answer number (only for ANS messages)
-        @param payload: The message payload
-        @type payload: an instance of L{Payload}
+        @param channel the channel the message is to be sent on
+        @param cmd the BEEP command/keyword (MSG, RPY, ERR, ANS or NUL)
+        @param msgno the message number
+        @param ansno the answer number (only for ANS messages)
+        @param payload the message payload (an instance of `Payload`)
         """
         self.session = channel.session
         self.channel = channel
