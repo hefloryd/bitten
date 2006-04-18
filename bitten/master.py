@@ -7,14 +7,6 @@
 # you should have received as part of this distribution. The terms
 # are also available at http://bitten.cmlenz.net/wiki/License.
 
-"""Build master implementation.
-
-This module is runnable as a script to launch the build master. The build
-master starts a single process that handles connections to any number of build
-slaves.
-"""
-
-import calendar
 from datetime import datetime, timedelta
 import logging
 import os
@@ -29,7 +21,7 @@ from trac.env import Environment
 from bitten.model import BuildConfig, Build, BuildStep, BuildLog, Report
 from bitten.queue import BuildQueue
 from bitten.trac_ext.main import BuildSystem
-from bitten.util import beep, xmlio
+from bitten.util import archive, beep, xmlio
 
 log = logging.getLogger('bitten.master')
 
@@ -37,10 +29,8 @@ DEFAULT_CHECK_INTERVAL = 120 # 2 minutes
 
 
 class Master(beep.Listener):
-    """BEEP listener implementation for the build master."""
 
-    def __init__(self, envs, ip, port, build_all=False,
-                 adjust_timestamps=False,
+    def __init__(self, envs, ip, port, adjust_timestamps=False,
                  check_interval=DEFAULT_CHECK_INTERVAL):
         beep.Listener.__init__(self, ip, port)
         self.profiles[OrchestrationProfileHandler.URI] = \
@@ -51,7 +41,7 @@ class Master(beep.Listener):
 
         self.queues = []
         for env in envs:
-            self.queues.append(BuildQueue(env, build_all=build_all))
+            self.queues.append(BuildQueue(env))
 
         self.schedule(self.check_interval, self._enqueue_builds)
 
@@ -60,17 +50,23 @@ class Master(beep.Listener):
             queue.reset_orphaned_builds()
         beep.Listener.close(self)
 
-    def _enqueue_builds(self):
+    def _cleanup(self, when):
+        for queue in self.queues:
+            queue.remove_unused_snapshots()
+
+    def _enqueue_builds(self, when):
         self.schedule(self.check_interval, self._enqueue_builds)
 
         for queue in self.queues:
             queue.populate()
 
         self.schedule(self.check_interval * 0.2, self._initiate_builds)
+        self.schedule(self.check_interval * 1.8, self._cleanup)
 
-    def _initiate_builds(self):
+    def _initiate_builds(self, when):
         available_slaves = set([name for name in self.handlers
                                 if not self.handlers[name].building])
+
         for idx, queue in enumerate(self.queues[:]):
             build, slave = queue.get_next_pending_build(available_slaves)
             if build:
@@ -79,13 +75,6 @@ class Master(beep.Listener):
                 self.queues.append(self.queues.pop(idx)) # Round robin
 
     def register(self, handler):
-        if handler.name in self.handlers:
-            # The slave is for some reason still registered... this shouldn't
-            # happen in theory, but apparently it does in the real world (see
-            # #106). We simply unregister it before trying to register it
-            # again.
-            self.unregister(handler)
-
         any_match = False
         for queue in self.queues:
             if queue.register_slave(handler.name, handler.info):
@@ -120,8 +109,6 @@ class Master(beep.Listener):
 class OrchestrationProfileHandler(beep.ProfileHandler):
     """Handler for communication on the Bitten build orchestration profile from
     the perspective of the build master.
-
-    An instance of this class is associated with exactly one remote build slave.
     """
     URI = 'http://bitten.cmlenz.net/beep/orchestration'
 
@@ -157,8 +144,11 @@ class OrchestrationProfileHandler(beep.ProfileHandler):
                         self.info[child.attr['name'] + '.' + name] = value
 
             if not self.master.register(self):
-                raise beep.ProtocolError(550, 'Nothing for you to build here, '
-                                         'please move along')
+                xml = xmlio.Element('error', code=550)[
+                    'Nothing for you to build here, please move along'
+                ]
+                self.channel.send_err(msgno, beep.Payload(xml))
+                return
 
             xml = xmlio.Element('ok')
             self.channel.send_rpy(msgno, beep.Payload(xml))
@@ -166,14 +156,7 @@ class OrchestrationProfileHandler(beep.ProfileHandler):
     def send_initiation(self, queue, build):
         log.info('Initiating build of "%s" on slave %s', build.config,
                  self.name)
-
-        build.slave = self.name
-        build.slave_info.update(self.info)
-        build.status = Build.IN_PROGRESS
-        build.update()
         self.building = True
-
-        config = BuildConfig.fetch(queue.env, build.config)
 
         def handle_reply(cmd, msgno, ansno, payload):
             if cmd == 'ERR':
@@ -184,66 +167,52 @@ class OrchestrationProfileHandler(beep.ProfileHandler):
                                     self.name, elem.gettext(),
                                     int(elem.attr['code']))
                 self.building = False
-                self._build_aborted(queue, build)
                 return
 
             elem = xmlio.parse(payload.body)
-            if elem.name != 'proceed':
-                raise beep.ProtocolError(500)
+            assert elem.name == 'proceed'
+            type = encoding = None
+            for child in elem.children('accept'):
+                type, encoding = child.attr['type'], child.attr.get('encoding')
+                if (type, encoding) in (('application/tar', 'gzip'),
+                                        ('application/tar', 'bzip2'),
+                                        ('application/tar', None),
+                                        ('application/zip', None)):
+                    break
+                type = None
+            if not type:
+                xml = xmlio.Element('error', code=550)[
+                    'None of the accepted archive formats supported'
+                ]
+                self.channel.send_err(beep.Payload(xml))
+                self.building = False
+                return
+            self.send_snapshot(queue, build, type, encoding)
 
-            snapshots = queue.snapshots[config.name]
-            snapshot = snapshots.get(build.rev)
-            if not snapshot:
-                # Request a snapshot for this build, and schedule a poll
-                # function that kicks off the snapshot transmission once the
-                # archive has been completely built
-                worker = snapshots.create(build.rev)
-                def _check_snapshot():
-                    worker.join(.5)
-                    if worker.isAlive():
-                        self.master.schedule(2, _check_snapshot)
-                    else:
-                        if self.name not in self.master.handlers:
-                            # The slave disconnected while we were building
-                            # the archive
-                            return
-                        snapshot = snapshots.get(build.rev)
-                        if snapshot is None:
-                            log.error('Failed to create snapshot archive for '
-                                      '%s@%s', config.path, build.rev)
-                            return
-                        self.send_snapshot(queue, build, snapshot)
-                _check_snapshot()
-            else:
-                self.send_snapshot(queue, build, snapshot)
+        config = BuildConfig.fetch(queue.env, build.config)
+        self.channel.send_msg(beep.Payload(config.recipe),
+                              handle_reply=handle_reply)
 
-        xml = xmlio.parse(config.recipe)
-        xml.attr['project'] = os.path.basename(queue.env.path)
-        self.channel.send_msg(beep.Payload(xml), handle_reply=handle_reply)
-
-    def send_snapshot(self, queue, build, snapshot):
+    def send_snapshot(self, queue, build, type, encoding):
         timestamp_delta = 0
         if self.master.adjust_timestamps:
             d = datetime.now() - timedelta(seconds=self.master.check_interval) \
                 - datetime.fromtimestamp(build.rev_time)
-            log.info('Warping timestamps by %s', d)
+            log.info('Warping timestamps by %s' % d)
             timestamp_delta = d.days * 86400 + d.seconds
 
         def handle_reply(cmd, msgno, ansno, payload):
             if cmd == 'ERR':
-                if payload.content_type != beep.BEEP_XML:
-                    raise beep.ProtocolError(500)
+                assert payload.content_type == beep.BEEP_XML
                 elem = xmlio.parse(payload.body)
                 if elem.name == 'error':
                     log.warning('Slave %s refused to start build: %s (%d)',
                                 self.name, elem.gettext(),
                                 int(elem.attr['code']))
                 self.building = False
-                self._build_aborted(queue, build)
 
             elif cmd == 'ANS':
-                if payload.content_type != beep.BEEP_XML:
-                    raise beep.ProtocolError(500)
+                assert payload.content_type == beep.BEEP_XML
                 elem = xmlio.parse(payload.body)
                 if elem.name == 'started':
                     self._build_started(queue, build, elem, timestamp_delta)
@@ -260,17 +229,26 @@ class OrchestrationProfileHandler(beep.ProfileHandler):
             elif cmd == 'NUL':
                 self.building = False
 
-        snapshot_name = os.path.basename(snapshot)
-        message = beep.Payload(file(snapshot, 'rb'),
-                               content_type='application/tar',
-                               content_encoding='bzip2',
-                               content_disposition=snapshot_name)
+        snapshot_format = {
+            ('application/tar', 'bzip2'): 'bzip2',
+            ('application/tar', 'gzip'): 'gzip',
+            ('application/tar', None): 'tar',
+            ('application/zip', None): 'zip',
+        }[(type, encoding)]
+        snapshot_path = queue.get_snapshot(build, snapshot_format, create=True)
+        snapshot_name = os.path.basename(snapshot_path)
+        message = beep.Payload(file(snapshot_path, 'rb'), content_type=type,
+                               content_disposition=snapshot_name,
+                               content_encoding=encoding)
         self.channel.send_msg(message, handle_reply=handle_reply)
 
     def _build_started(self, queue, build, elem, timestamp_delta=None):
+        build.slave = self.name
+        build.slave_info.update(self.info)
         build.started = int(_parse_iso_datetime(elem.attr['time']))
         if timestamp_delta:
             build.started -= timestamp_delta
+        build.status = Build.IN_PROGRESS
         build.update()
 
         log.info('Slave %s started build %d ("%s" as of [%s])',
@@ -296,7 +274,7 @@ class OrchestrationProfileHandler(beep.ProfileHandler):
             step.status = BuildStep.FAILURE
         else:
             step.status = BuildStep.SUCCESS
-        step.errors += [error.gettext() for error in elem.children('error')]
+        step.errors += [err.gettext() for err in elem.children('error')]
         step.insert(db=db)
 
         for idx, log_elem in enumerate(elem.children('log')):
@@ -365,12 +343,15 @@ def _parse_iso_datetime(string):
     without time zone information."""
     try:
         string = string.split('.', 1)[0] # strip out microseconds
-        return calendar.timegm(time.strptime(string, '%Y-%m-%dT%H:%M:%S'))
+        secs = time.mktime(time.strptime(string, '%Y-%m-%dT%H:%M:%S'))
+        tzoffset = time.timezone
+        if time.daylight:
+            tzoffset = time.altzone
+        return secs - tzoffset
     except ValueError, e:
         raise ValueError, 'Invalid ISO date/time %s (%s)' % (string, e)
 
 def main():
-    """Main entry point for running the build master."""
     from bitten import __version__ as VERSION
     from optparse import OptionParser
 
@@ -387,9 +368,6 @@ def main():
     parser.add_option('-i', '--interval', dest='interval', metavar='SECONDS',
                       default=DEFAULT_CHECK_INTERVAL, type='int',
                       help='poll interval for changeset detection')
-    parser.add_option('--build-all', action='store_true', dest='buildall',
-                      help='build older revisions even when a build for a '
-                           'newer revision has already been performed')
     parser.add_option('--timewarp', action='store_true', dest='timewarp',
                       help='adjust timestamps of builds to be near the '
                            'timestamps of the corresponding changesets')
@@ -439,18 +417,11 @@ def main():
             host = ip
 
     envs = []
-    env_names = set()
-    for env_path in [os.path.normpath(arg) for arg in args]:
-        if not os.path.isdir(env_path):
-            log.warning('Ignoring %s: not a directory', env_path)
+    for arg in args:
+        if not os.path.isdir(arg):
+            log.warning('Ignoring %s: not a directory', arg)
             continue
-        env_name = os.path.basename(env_path)
-        if env_name in env_names:
-            log.warning('Ignoring %s: duplicate project name "%s"', env_path,
-                        env_name)
-            continue
-        env_names.add(env_name)
-        env = Environment(env_path)
+        env = Environment(arg)
         if BuildSystem(env):
             if env.needs_upgrade():
                 log.warning('Environment at %s needs to be upgraded', env.path)
@@ -460,8 +431,7 @@ def main():
         log.error('None of the specified environments has support for Bitten')
         sys.exit(2)
 
-    master = Master(envs, host, port, build_all=options.buildall,
-                    adjust_timestamps=options.timewarp,
+    master = Master(envs, host, port, adjust_timestamps=options.timewarp,
                     check_interval=options.interval)
     try:
         master.run(timeout=5.0)

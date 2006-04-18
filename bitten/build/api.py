@@ -7,8 +7,6 @@
 # you should have received as part of this distribution. The terms
 # are also available at http://bitten.cmlenz.net/wiki/License.
 
-"""Functions and classes used to simplify the implementation recipe commands."""
-
 import logging
 import fnmatch
 import os
@@ -26,35 +24,19 @@ class TimeoutError(Exception):
     """Exception raised when the execution of a command times out."""
 
 
-def _combine(*iterables):
-    iterables = [iter(iterable) for iterable in iterables]
-    size = len(iterables)
-    while True:
-        to_yield = [None] * size
-        for idx, iterable in enumerate(iterables):
-            if iterable is None:
-                continue
-            try:
-                to_yield[idx] = iterable.next()
-            except StopIteration:
-                iterables[idx] = None
-        if not [iterable for iterable in iterables if iterable is not None]:
-            break
-        yield tuple(to_yield)
-
-
 class CommandLine(object):
     """Simple helper for executing subprocesses."""
+    # TODO: Use 'subprocess' module if available (Python >= 2.4)
 
     def __init__(self, executable, args, input=None, cwd=None):
         """Initialize the CommandLine object.
         
-        @param executable: the name of the program to execute
-        @param args: a list of arguments to pass to the executable
-        @param input: string or file-like object containing any input data for
-            the program
-        @param cwd: The working directory to change to before executing the
-            command
+        @param executable The name of the program to execute
+        @param args A list of arguments to pass to the executable
+        @param input String or file-like object containing any input data for
+                     the program
+        @param cwd The working directory to change to before executing the
+                   command
         """
         self.executable = executable
         self.arguments = [str(arg) for arg in args]
@@ -67,12 +49,6 @@ class CommandLine(object):
     if os.name == 'nt': # windows
 
         def execute(self, timeout=None):
-            """Execute the command, and return a generator for iterating over
-            the output written to the standard output and error streams.
-            
-            @param timeout: number of seconds before the external process
-                should be aborted (not supported on Windows)
-            """
             args = [self.executable] + self.arguments
             for idx, arg in enumerate(args):
                 if arg.find(' ') >= 0:
@@ -126,19 +102,13 @@ class CommandLine(object):
                 if self.cwd:
                     os.chdir(old_cwd)
 
-            for out_line, err_line in _combine(out_lines, err_lines):
+            for out_line, err_line in self._combine(out_lines, err_lines):
                 yield out_line and out_line.rstrip().replace('\x00', ''), \
                       err_line and err_line.rstrip().replace('\x00', '')
 
     else: # posix
 
         def execute(self, timeout=None):
-            """Execute the command, and return a generator for iterating over
-            the output written to the standard output and error streams.
-            
-            @param timeout: number of seconds before the external process
-                should be aborted (not supported on Windows)
-            """
             import popen2, select
             if self.cwd:
                 old_cwd = os.getcwd()
@@ -187,7 +157,7 @@ class CommandLine(object):
                         err_eof = True
                 out_lines = self._extract_lines(out_data)
                 err_lines = self._extract_lines(err_data)
-                for out_line, err_line in _combine(out_lines, err_lines):
+                for out_line, err_line in self._combine(out_lines, err_lines):
                     yield out_line, err_line
                 time.sleep(.1)
             self.returncode = pipe.wait()
@@ -196,6 +166,20 @@ class CommandLine(object):
 
             if self.cwd:
                 os.chdir(old_cwd)
+
+    def _combine(self, *iterables):
+        iterables = [iter(iterable) for iterable in iterables]
+        size = len(iterables)
+        while [iterable for iterable in iterables if iterable is not None]:
+            to_yield = [None] * size
+            for idx, iterable in enumerate(iterables):
+                if iterable is None:
+                    continue
+                try:
+                    to_yield[idx] = iterable.next()
+                except StopIteration:
+                    iterables[idx] = None
+            yield tuple(to_yield)
 
     def _extract_lines(self, data):
         extracted = []
@@ -215,7 +199,7 @@ class CommandLine(object):
         elif _endswith_linesep(buf):
             extracted.append(buf)
             buf = ''
-        data[:] = [buf] * bool(buf)
+        data[:] = [buf]
 
         return [line.rstrip() for line in extracted]
 
@@ -228,14 +212,6 @@ class FileSet(object):
                         '.DS_Store', 'Thumbs.db']
 
     def __init__(self, basedir, include=None, exclude=None):
-        """Create the file set.
-        
-        @param basedir: the base directory for all files in the set
-        @param include: a list of patterns that define which files should be
-            included in the set
-        @param exclude: a list of patterns that define which files should be
-            excluded from the set
-        """
         self.files = []
         self.basedir = basedir
 
@@ -275,13 +251,8 @@ class FileSet(object):
                     self.files.append(filepath)
 
     def __iter__(self):
-        """Iterate over the names of all files in the set."""
         for filename in self.files:
             yield filename
 
     def __contains__(self, filename):
-        """Return whether the given file name is in the set.
-        
-        @param filename: the name of the file to check
-        """
         return filename in self.files

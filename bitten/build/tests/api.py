@@ -14,7 +14,6 @@ import tempfile
 import unittest
 
 from bitten.build import CommandLine, FileSet, TimeoutError
-from bitten.build.api import _combine
 
 
 class CommandLineTestCase(unittest.TestCase):
@@ -32,33 +31,6 @@ class CommandLineTestCase(unittest.TestCase):
             fd.write(content)
         fd.close()
         return filename
-
-    def test_extract_lines(self):
-        cmdline = CommandLine('test', [])
-        data = ['foo\n', 'bar\n']
-        lines = cmdline._extract_lines(data)
-        self.assertEqual(['foo', 'bar'], lines)
-        self.assertEqual([], data)
-
-    def test_extract_lines_spanned(self):
-        cmdline = CommandLine('test', [])
-        data = ['foo ', 'bar\n']
-        lines = cmdline._extract_lines(data)
-        self.assertEqual(['foo bar'], lines)
-        self.assertEqual([], data)
-
-    def test_extract_lines_trailing(self):
-        cmdline = CommandLine('test', [])
-        data = ['foo\n', 'bar']
-        lines = cmdline._extract_lines(data)
-        self.assertEqual(['foo'], lines)
-        self.assertEqual(['bar'], data)
-
-    def test_combine(self):
-        list1 = ['foo', 'bar']
-        list2 = ['baz']
-        combined = list(_combine(list1, list2))
-        self.assertEqual([('foo', 'baz'), ('bar', None)], combined)
 
     def test_single_argument(self):
         cmdline = CommandLine('python', ['-V'])
@@ -84,32 +56,33 @@ for arg in sys.argv[1:]:
         stdout = []
         stderr = []
         for out, err in cmdline.execute(timeout=5.0):
-            stdout.append(out)
-            stderr.append(err)
+            if out is not None:
+                stdout.append(out)
+            if err is not None:
+                stderr.append(err)
         py_version = '.'.join([str(v) for (v) in sys.version_info[:3]])
+        self.assertEqual([], stderr)
         self.assertEqual(['foo', 'bar', 'baz'], stdout)
-        self.assertEqual([None, None, None], stderr)
         self.assertEqual(0, cmdline.returncode)
 
     def test_output_error_streams(self):
         script_file = self._create_file('test.py', content="""
-import sys, time
+import sys
 print>>sys.stdout, 'Hello'
 print>>sys.stdout, 'world!'
-sys.stdout.flush()
-time.sleep(.1)
 print>>sys.stderr, 'Oops'
-sys.stderr.flush()
 """)
         cmdline = CommandLine('python', [script_file])
         stdout = []
         stderr = []
         for out, err in cmdline.execute(timeout=5.0):
-            stdout.append(out)
-            stderr.append(err)
+            if out is not None:
+                stdout.append(out)
+            if err is not None:
+                stderr.append(err)
         py_version = '.'.join([str(v) for (v) in sys.version_info[:3]])
-        self.assertEqual(['Hello', 'world!', None], stdout)
-        self.assertEqual([None, None, 'Oops'], stderr)
+        self.assertEqual(['Oops'], stderr)
+        self.assertEqual(['Hello', 'world!'], stdout)
         self.assertEqual(0, cmdline.returncode)
 
     def test_input_stream_as_fileobj(self):
@@ -126,11 +99,13 @@ if data == 'abcd':
             stdout = []
             stderr = []
             for out, err in cmdline.execute(timeout=5.0):
-                stdout.append(out)
-                stderr.append(err)
+                if out is not None:
+                    stdout.append(out)
+                if err is not None:
+                    stderr.append(err)
             py_version = '.'.join([str(v) for (v) in sys.version_info[:3]])
+            self.assertEqual([], stderr)
             self.assertEqual(['Thanks'], stdout)
-            self.assertEqual([None], stderr)
             self.assertEqual(0, cmdline.returncode)
         finally:
             input_fileobj.close()
@@ -146,22 +121,26 @@ if data == 'abcd':
         stdout = []
         stderr = []
         for out, err in cmdline.execute(timeout=5.0):
-            stdout.append(out)
-            stderr.append(err)
+            if out is not None:
+                stdout.append(out)
+            if err is not None:
+                stderr.append(err)
         py_version = '.'.join([str(v) for (v) in sys.version_info[:3]])
+        self.assertEqual([], stderr)
         self.assertEqual(['Thanks'], stdout)
-        self.assertEqual([None], stderr)
         self.assertEqual(0, cmdline.returncode)
 
-    def test_timeout(self):
-        script_file = self._create_file('test.py', content="""
+    if os.name != 'nt':
+        # This test fails on windows because there's no timeout implementation
+        def test_timeout(self):
+            script_file = self._create_file('test.py', content="""
 import time
 time.sleep(2.0)
 print 'Done'
 """)
-        cmdline = CommandLine('python', [script_file])
-        iterable = iter(cmdline.execute(timeout=.5))
-        self.assertRaises(TimeoutError, iterable.next)
+            cmdline = CommandLine('python', [script_file])
+            iterable = iter(cmdline.execute(timeout=.5))
+            self.assertRaises(TimeoutError, iterable.next)
 
 
 class FileSetTestCase(unittest.TestCase):

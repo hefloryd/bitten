@@ -15,6 +15,7 @@ import unittest
 from trac.test import EnvironmentStub, Mock
 from bitten.model import BuildConfig, TargetPlatform, Build, BuildStep, schema
 from bitten.queue import BuildQueue, collect_changes
+from bitten.util import archive
 from bitten.trac_ext.compat import schema_to_sql
 
 
@@ -211,7 +212,7 @@ class BuildQueueTestCase(unittest.TestCase):
 
         queue = BuildQueue(self.env)
         assert not queue.register_slave('foo', {'family': 'nt'})
-        self.assertRaises(KeyError, queue.slaves.__getitem__, platform.id)
+        self.assertEqual([], queue.slaves[platform.id])
 
     def test_register_slave_match_regexp(self):
         BuildConfig(self.env, 'test', active=True).insert()
@@ -242,7 +243,7 @@ class BuildQueueTestCase(unittest.TestCase):
 
         queue = BuildQueue(self.env)
         assert not queue.register_slave('foo', {'version': '7.8.1'})
-        self.assertRaises(KeyError, queue.slaves.__getitem__, platform.id)
+        self.assertEqual([], queue.slaves[platform.id])
 
     def test_register_slave_match_regexp_invalid(self):
         BuildConfig(self.env, 'test', active=True).insert()
@@ -252,7 +253,7 @@ class BuildQueueTestCase(unittest.TestCase):
 
         queue = BuildQueue(self.env)
         assert not queue.register_slave('foo', {'version': '7.8.1'})
-        self.assertRaises(KeyError, queue.slaves.__getitem__, platform.id)
+        self.assertEqual([], queue.slaves[platform.id])
 
     def test_unregister_slave_no_builds(self):
         queue = BuildQueue(self.env)
@@ -279,6 +280,23 @@ class BuildQueueTestCase(unittest.TestCase):
         self.assertEqual('', build.slave)
         self.assertEqual({}, build.slave_info)
         self.assertEqual(0, build.started)
+
+    def test_get_existing_snapshot(self):
+        BuildConfig(self.env, 'test', active=True).insert()
+        build = Build(self.env, config='test', platform=1, rev=123, rev_time=42,
+                      status=Build.PENDING)
+        build.insert()
+        snapshot = os.path.join(self.env.path, 'snapshots', 'test_r123.zip')
+        snapshot_file = file(snapshot, 'w')
+        snapshot_file.close()
+        md5sum_file = file(snapshot + '.md5', 'w')
+        try:
+            md5sum_file.write(archive._make_md5sum(snapshot))
+        finally:
+            md5sum_file.close()
+
+        queue = BuildQueue(self.env)
+        self.assertEqual(snapshot, queue.get_snapshot(build, 'zip'))
 
 
 def suite():

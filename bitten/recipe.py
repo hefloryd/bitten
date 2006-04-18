@@ -7,15 +7,10 @@
 # you should have received as part of this distribution. The terms
 # are also available at http://bitten.cmlenz.net/wiki/License.
 
-"""Execution of build recipes.
-
-This module provides various classes that can be used to process build recipes,
-most importantly the L{Recipe} class.
-"""
-
 import keyword
 import logging
 import os
+import re
 try:
     set
 except NameError:
@@ -26,41 +21,27 @@ from bitten.build import BuildError
 from bitten.build.config import Configuration
 from bitten.util import xmlio
 
-__all__ = ['Recipe', 'InvalidRecipeError']
+__all__ = ['Recipe']
 
 log = logging.getLogger('bitten.recipe')
 
 
 class InvalidRecipeError(Exception):
-    """Exception raised when a recipe is not valid."""
+    """Exception raised when a recipe cannot be processed."""
 
 
 class Context(object):
-    """The context in which a build is executed."""
+    """The context in which a recipe command or report is run."""
 
     step = None # The current step
     generator = None # The current generator (namespace#name)
 
     def __init__(self, basedir, config=None):
-        """Initialize the context.
-        
-        @param basedir: a string containing the working directory for the build
-        @param config: the build slave configuration
-        @type config: an instance of L{bitten.build.config.Configuration}
-        """
         self.basedir = os.path.realpath(basedir)
         self.config = config or Configuration()
         self.output = []
 
     def run(self, step, namespace, name, attr):
-        """Run the specified recipe command.
-        
-        @param step: the build step that the command belongs to
-        @param namespace: the namespace URI of the command
-        @param name: the local tag name of the command
-        @param attr: a dictionary containing the attributes defined on the
-            command element
-        """
         self.step = step
 
         try:
@@ -93,34 +74,15 @@ class Context(object):
             self.step = None
 
     def error(self, message):
-        """Record an error message.
-        
-        @param message: A string containing the error message.
-        """
         self.output.append((Recipe.ERROR, None, self.generator, message))
 
-    def log(self, xml):
-        """Record log output.
-        
-        @param xml: an XML fragment containing the log messages
-        """
-        self.output.append((Recipe.LOG, None, self.generator, xml))
+    def log(self, xml_elem):
+        self.output.append((Recipe.LOG, None, self.generator, xml_elem))
 
-    def report(self, category, xml):
-        """Record report data.
-        
-        @param category: the name of category of the report
-        @param xml: an XML fragment containing the report data
-        """
-        self.output.append((Recipe.REPORT, category, self.generator, xml))
+    def report(self, category, xml_elem):
+        self.output.append((Recipe.REPORT, category, self.generator, xml_elem))
 
     def report_file(self, category=None, file_=None):
-        """Read report data from a file and record it.
-        
-        @param category: the name of the category of the report
-        @param file_: the path to the file containing the report data, relative
-            to the base directory
-        """
         filename = self.resolve(file_)
         try:
             fileobj = file(filename, 'r')
@@ -142,11 +104,6 @@ class Context(object):
                        % (category, filename, e))
 
     def resolve(self, *path):
-        """Return the path of a file relative to the base directory.
-        
-        Accepts any number of positional arguments, which are joined using the
-        system path separator to form the path.
-        """
         return os.path.normpath(os.path.join(self.basedir, *path))
 
 
@@ -158,22 +115,12 @@ class Step(object):
     """
 
     def __init__(self, elem):
-        """Create the step.
-        
-        @param elem: the XML element representing the step
-        @type elem: an instance of L{bitten.util.xmlio.ParsedElement}
-        """
         self._elem = elem
         self.id = elem.attr['id']
         self.description = elem.attr.get('description')
         self.onerror = elem.attr.get('onerror', 'fail')
 
     def execute(self, ctxt):
-        """Execute this step in the given context.
-        
-        @param ctxt: the build context
-        @type ctxt: an instance of L{Context}
-        """
         for child in self._elem:
             ctxt.run(self, child.namespace, child.name, child.attr)
 
@@ -193,8 +140,8 @@ class Step(object):
 class Recipe(object):
     """A build recipe.
     
-    Iterate over this object to get the individual build steps in the order
-    they have been defined in the recipe file.
+    Iterate over this object to get the individual build steps in the order they
+    have been defined in the recipe file.
     """
 
     ERROR = 'error'
@@ -202,38 +149,16 @@ class Recipe(object):
     REPORT = 'report'
 
     def __init__(self, xml, basedir=os.getcwd(), config=None):
-        """Create the recipe.
-        
-        @param xml: the XML document representing the recipe
-        @type xml: an instance of L{bitten.util.xmlio.ParsedElement}
-        @param basedir: the base directory for the build
-        @param config: the slave configuration (optional)
-        @type config: an instance of L{bitten.build.config.Configuration}
-        """
         assert isinstance(xml, xmlio.ParsedElement)
         self.ctxt = Context(basedir, config)
         self._root = xml
 
     def __iter__(self):
-        """Iterate over the individual steps of the recipe."""
+        """Provide an iterator over the individual steps of the recipe."""
         for child in self._root.children('step'):
             yield Step(child)
 
     def validate(self):
-        """Validate the recipe.
-        
-        This method checks a number of constraints:
-         - the name of the root element must be "build"
-         - the only permitted child elements or the root element with the name
-           "step"
-         - the recipe must contain at least one step
-         - step elements must have a unique "id" attribute
-         - a step must contain at least one nested command
-         - commands must not have nested content
-
-        @raise InvalidRecipeError: in case any of the above contraints is
-            violated
-        """
         if self._root.name != 'build':
             raise InvalidRecipeError, 'Root element must be <build>'
         steps = list(self._root.children())

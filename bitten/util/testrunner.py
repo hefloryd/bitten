@@ -164,7 +164,7 @@ class unittest(Command):
             raise DistutilsExecError, 'unit tests failed'
 
 
-def main():
+def main(argv):
     from distutils.dist import Distribution
     from optparse import OptionParser
 
