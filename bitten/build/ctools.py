@@ -283,7 +283,7 @@ def cunit (ctxt, file_=None, srcdir=None):
         print e
         log.warning('Error parsing CUnit results file (%s)', e)
 
-def gcov(ctxt, include=None, exclude=None, prefix=None, root=""):
+def gcov(ctxt, include=None, exclude=None, prefix=None, root="", relative=None):
     """Run ``gcov`` to extract coverage data where available.
     
     :param ctxt: the build context
@@ -291,8 +291,10 @@ def gcov(ctxt, include=None, exclude=None, prefix=None, root=""):
     :param include: patterns of files and directories to include
     :param exclude: patterns of files and directories that should be excluded
     :param prefix: optional prefix name that is added to object files by the
-                   build system
+                   build system. name = prefix-file
     :param root: optional root path in which the build system puts the object
+                 files
+    :param relative: optional relative path in which the build system puts the object
                  files
     """
     file_re = re.compile(r'^File (?:\'|\`)(?P<file>[^\']+)\'\s*$')
@@ -323,6 +325,8 @@ def gcov(ctxt, include=None, exclude=None, prefix=None, root=""):
         stem = os.path.splitext(filename)[0]
         if prefix is not None:
             stem = prefix + '-' + stem
+        if relative is not None:
+            stem = relative + stem
 
         objfile = os.path.join (root, filepath, stem + '.o')
         if not os.path.isfile(ctxt.resolve(objfile)):
