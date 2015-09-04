@@ -83,6 +83,8 @@ order by build.rev_time;""" % (config.name,
                     'legend': {'position': 'sw', 'backgroundOpacity': 0.7},
                     'xaxis': {'tickDecimals': 0},
                     'yaxis': {'tickDecimals': 0},
+                    'grid': { 'hoverable': 'true'},
+                    'selection': {'mode': 'x'},
                 },
                }
 

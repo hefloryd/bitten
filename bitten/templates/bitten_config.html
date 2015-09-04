@@ -10,6 +10,7 @@
     <title>$title</title>
     <script type="text/javascript" src="${req.href.chrome('bitten', 'excanvas.js')}"></script>
     <script type="text/javascript" src="${req.href.chrome('bitten', 'jquery.flot.js')}"></script>
+    <script type="text/javascript" src="${req.href.chrome('bitten', 'jquery.flot.selection.js')}"></script>
   </head>
   <body>
     <strong py:def="build_status(status)" class="status">
@@ -116,9 +117,54 @@
         <script type="text/javascript">
           $(document).ready(function() {
               $.getJSON('${chart.href}', function(json) {
+              
+                  function showTooltip(x, y, contents) {
+                      $('<div id="tooltip">' + contents + '</div>').css( {
+                          position: 'absolute',
+                          display: 'none',
+                          top: y + 5,
+                          left: x + 5,
+                          border: '1px solid #fdd',
+                          padding: '2px',
+                          'background-color': '#eee',
+                          opacity: 0.80
+                      }).appendTo("body").fadeIn(200);
+                  }
+
+                  var chart = $("#chart_${chart.category}");
+              
                   $("#chart_${chart.category}_title").append(json.title);
                   json.options['xaxis']['tickFormatter'] = function(rev) { return "[" + rev + "]"; }; 
-                  $.plot($("#chart_${chart.category}"), json.data, json.options); 
+
+                  chart.bind("plotselected", function (event, ranges) {
+                      $.plot(chart, json.data,
+                          $.extend(true, {}, json.options, {
+                              xaxis: { min: ranges.xaxis.from, max: ranges.xaxis.to }
+                          }));
+                  });
+
+                  chart.bind("plotunselected", function (event) {
+                      $.plot(chart, json.data, json.options);
+                  });
+
+                  var previousPoint = null;
+                  chart.bind("plothover", function (event, pos, item) {
+                      if (item) {
+                          if (previousPoint != item.dataIndex) {
+                              previousPoint = item.dataIndex;
+
+                              $("#tooltip").remove();
+                              showTooltip(item.pageX, item.pageY,
+                                  "[" + item.datapoint[0] + "] = " + item.datapoint[1]);
+                          }
+                      }
+                      else {
+                          $("#tooltip").remove();
+                          previousPoint = null;
+                      }
+                  });
+
+                  $.plot($(chart), json.data, json.options);
               });
           });
         </script>
