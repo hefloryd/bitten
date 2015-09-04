@@ -17,7 +17,7 @@ from bitten.model import BuildConfig, TargetPlatform, Build, BuildStep, \
 import os
 import shutil
 import tempfile
-
+import gzip
 
 class BaseModelTestCase(unittest.TestCase):
     """ Inheritable base for model test case classes. """
@@ -422,8 +422,8 @@ class BuildLogTestCase(BaseModelTestCase):
         self.assertEqual([], log.messages)
 
     def test_insert(self):
-        log = BuildLog(self.env, build=1, step='test', generator='distutils', filename='1.log')
-        full_file = log.get_log_file('1.log')
+        log = BuildLog(self.env, build=1, step='test', generator='distutils', filename='1.log.gz')
+        full_file = log.get_log_file('1.log.gz')
         if os.path.exists(full_file):
             os.remove(full_file)
         log.messages = [
@@ -437,8 +437,8 @@ class BuildLogTestCase(BaseModelTestCase):
         cursor = db.cursor()
         cursor.execute("SELECT build,step,generator,filename FROM bitten_log "
                        "WHERE id=%s", (log.id,))
-        self.assertEqual((1, 'test', 'distutils', '1.log'), cursor.fetchone())
-        lines = open(full_file, "rb").readlines()
+        self.assertEqual((1, 'test', 'distutils', '1.log.gz'), cursor.fetchone())
+        lines = gzip.open(full_file, "rb").readlines()
         self.assertEqual('running tests\n', lines[0])
         self.assertEqual('tests failed\n', lines[1])
         if os.path.exists(full_file):
@@ -457,7 +457,7 @@ class BuildLogTestCase(BaseModelTestCase):
         cursor = db.cursor()
         cursor.execute("SELECT build,step,generator,filename FROM bitten_log "
                        "WHERE id=%s", (log.id,))
-        self.assertEqual((1, 'test', 'distutils', '1.log'), cursor.fetchone())
+        self.assertEqual((1, 'test', 'distutils', '1.log.gz'), cursor.fetchone())
         file_exists = os.path.exists(full_file)
         if file_exists:
             os.remove(full_file)
@@ -507,9 +507,9 @@ class BuildLogTestCase(BaseModelTestCase):
 
         # fetch it fresh - check object and files
         build_log = BuildLog.fetch(self.env, id=build_log.id)
-        self.assertEquals(build_log.filename, "%s.log" % build_log.id)
+        self.assertEquals(build_log.filename, "%s.log.gz" % build_log.id)
         log_file = build_log.get_log_file(build_log.filename)
-        levels_file = log_file + BuildLog.LEVELS_SUFFIX
+        levels_file = build_log.get_level_file(build_log.filename)
         self.failUnless(os.path.exists(log_file), 'log_file does not exist')
         self.failUnless(os.path.exists(levels_file),
                                                 'levels_file does not exist')
@@ -526,14 +526,14 @@ class BuildLogTestCase(BaseModelTestCase):
         db = self.env.get_db_cnx()
         cursor = db.cursor()
         cursor.execute("INSERT INTO bitten_log (build,step,generator,filename) "
-                       "VALUES (%s,%s,%s,%s)", (1, 'test', 'distutils', '1.log'))
+                       "VALUES (%s,%s,%s,%s)", (1, 'test', 'distutils', '1.log.gz'))
         id = db.get_last_id(cursor, 'bitten_log')
         logs_dir = self.env.config.get("bitten", "logsdir", "log/bitten")
         if os.path.isabs(logs_dir):
             raise ValueError("Should not have absolute logs directory for temporary test")
         logs_dir = os.path.join(self.env.path, logs_dir)
-        full_file = os.path.join(logs_dir, "1.log")
-        open(full_file, "wb").writelines(["running tests\n", "tests failed\n", u"test unicode\xbb\n".encode("UTF-8")])
+        full_file = os.path.join(logs_dir, "1.log.gz")
+        gzip.open(full_file, "wb").writelines(["running tests\n", "tests failed\n", u"test unicode\xbb\n".encode("UTF-8")])
 
         log = BuildLog.fetch(self.env, id=id, db=db)
         self.assertEqual(True, log.exists)
@@ -551,14 +551,14 @@ class BuildLogTestCase(BaseModelTestCase):
         db = self.env.get_db_cnx()
         cursor = db.cursor()
         cursor.execute("INSERT INTO bitten_log (build,step,generator,filename) "
-                       "VALUES (%s,%s,%s,%s)", (1, 'test', 'distutils', '1.log'))
+                       "VALUES (%s,%s,%s,%s)", (1, 'test', 'distutils', '1.log.gz'))
         id = db.get_last_id(cursor, 'bitten_log')
         logs_dir = self.env.config.get("bitten", "logsdir", "log/bitten")
         if os.path.isabs(logs_dir):
             raise ValueError("Should not have absolute logs directory for temporary test")
         logs_dir = os.path.join(self.env.path, logs_dir)
-        full_file = os.path.join(logs_dir, "1.log")
-        open(full_file, "wb").writelines(["running tests\n", "tests failed\n", u"test unicode\xbb\n".encode("UTF-8")])
+        full_file = os.path.join(logs_dir, "1.log.gz")
+        gzip.open(full_file, "wb").writelines(["running tests\n", "tests failed\n", u"test unicode\xbb\n".encode("UTF-8")])
 
         logs = BuildLog.select(self.env, build=1, step='test', db=db)
         log = logs.next()

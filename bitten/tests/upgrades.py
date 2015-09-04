@@ -23,7 +23,7 @@ from bitten import upgrades, main, model
 import os
 import shutil
 import tempfile
-
+import gzip
 
 class BaseUpgradeTestCase(unittest.TestCase):
 
@@ -260,7 +260,7 @@ class UpgradeScriptsTestCase(BaseUpgradeTestCase):
         self.assertEqual(logs[0].build, 12)
         self.assertEqual(logs[0].step, 'step2')
         log_file = logs[0].get_log_file(logs[0].filename)
-        self.assertEqual(file(log_file, "rU").read(), "line1\nline2\n")
+        self.assertEqual(gzip.open(log_file, "rU").read(), "line1\nline2\n")
 
         # check final sequences
         for tbl, col in [

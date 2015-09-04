@@ -18,6 +18,7 @@ from trac.util.datefmt import to_timestamp, utcmin, utcmax
 from datetime import datetime
 import codecs
 import os
+import gzip
 from bitten.util.repository import get_repos
 
 __docformat__ = 'restructuredtext en'
@@ -776,6 +777,15 @@ class BuildLog(object):
             raise ValueError("Filename may not contain path: %s" % (filename,))
         return os.path.join(self.logs_dir, filename)
 
+    def get_level_file(self, filename):
+        """Returns the full path to the level file"""
+        root, ext = os.path.splitext(self.get_log_file(filename))
+        if ext == ".gz":
+            level_file = root + self.LEVELS_SUFFIX + ".gz"
+        else:
+            level_file = root + self.LEVELS_SUFFIX
+        return level_file
+
     def delete(self, db=None):
         """Remove the build log from the database."""
         assert self.exists, 'Cannot delete a non-existing build log'
@@ -793,7 +803,7 @@ class BuildLog(object):
                     os.remove(log_file)
                 except Exception, e:
                     self.env.log.warning("Error removing log file %s: %s" % (log_file, e))
-            level_file = log_file + self.LEVELS_SUFFIX
+            level_file = self.get_level_file(self.filename)
             if os.path.exists(level_file):
                 try:
                     self.env.log.debug("Deleting level file: %s" % level_file)
@@ -824,13 +834,17 @@ class BuildLog(object):
                        "VALUES (%s,%s,%s,%s)", (self.build, self.step,
                        self.generator, self.orderno))
         id = db.get_last_id(cursor, 'bitten_log')
-        log_file = "%s.log" % (id,)
+        log_file = "%s.log.gz" % (id,)
         cursor.execute("UPDATE bitten_log SET filename=%s WHERE id=%s", (log_file, id))
         if self.messages:
             log_file_name = self.get_log_file(log_file)
-            level_file_name = log_file_name + self.LEVELS_SUFFIX
-            codecs.open(log_file_name, "wb", "UTF-8").writelines([to_unicode(msg[1]+"\n") for msg in self.messages])
-            codecs.open(level_file_name, "wb", "UTF-8").writelines([to_unicode(msg[0]+"\n") for msg in self.messages])
+            level_file_name = self.get_level_file(log_file)
+            log_file = gzip.open(log_file_name, "wb")
+            log_writer = codecs.getwriter("UTF-8")(log_file)
+            log_writer.writelines([to_unicode(msg[1]+"\n") for msg in self.messages])
+            level_file = gzip.open(level_file_name, "wb")
+            level_writer = codecs.getwriter("UTF-8")(level_file)
+            level_writer.writelines([to_unicode(msg[0]+"\n") for msg in self.messages])
 
         if handle_ta:
             db.commit()
@@ -852,12 +866,22 @@ class BuildLog(object):
         if log.filename:
             log_filename = log.get_log_file(log.filename)
             if os.path.exists(log_filename):
-                log_lines = codecs.open(log_filename, "rb", "UTF-8").readlines()
+                if os.path.splitext(log_filename)[1] == ".gz":
+                    log_file = gzip.open(log_filename, "rb")
+                else:
+                    log_file = open(log_filename, "rb")
+                log_reader = codecs.getreader("UTF-8")(log_file)
+                log_lines = log_reader.readlines()
             else:
                 log_lines = []
-            level_filename = log.get_log_file(log.filename + cls.LEVELS_SUFFIX)
+            level_filename = log.get_level_file(log.filename)
             if os.path.exists(level_filename):
-                log_levels = dict(enumerate(codecs.open(level_filename, "rb", "UTF-8").readlines()))
+                if os.path.splitext(level_filename)[1] == ".gz":
+                    level_file = gzip.open(level_filename, "rb")
+                else:
+                    level_file = open(level_filename, "rb")
+                level_reader = codecs.getreader("UTF-8")(level_file)
+                log_levels = dict(enumerate(level_reader.readlines(level_file)))
             else:
                 log_levels = {}
             log.messages = [(log_levels.get(line_num, BuildLog.UNKNOWN).rstrip("\n"), line.rstrip("\n")) for line_num, line in enumerate(log_lines)]
@@ -1040,4 +1064,4 @@ class Report(object):
 
 schema = BuildConfig._schema + TargetPlatform._schema + Build._schema + \
          BuildStep._schema + BuildLog._schema + Report._schema
-schema_version = 12
+schema_version = 13

@@ -20,6 +20,7 @@ from trac.core import TracError
 from trac.db import DatabaseManager, Table, Column, Index
 from trac.util.text import to_unicode
 import codecs
+import gzip
 
 __docformat__ = 'restructuredtext en'
 
@@ -620,6 +621,37 @@ def fix_sequences(env, db):
     update_sequence(env, db, 'bitten_platform', 'id')
     update_sequence(env, db, 'bitten_report', 'id')
 
+def compress_file(filename):
+    f_in = open(filename, "rb")
+    f_out = gzip.open(filename + ".gz", "wb")
+    f_out.writelines(f_in)
+    f_out.close()
+    f_in.close()
+
+def compress_logs(env, db):
+    """Compress bitten logs."""
+    logs_dir = env.config.get("bitten", "logs_dir", "log/bitten")
+    if not os.path.isabs(logs_dir):
+        logs_dir = os.path.join(env.path, logs_dir)
+
+    cursor = db.cursor()
+    update_cursor = db.cursor()
+    cursor.execute("SELECT id, filename FROM bitten_log")
+    for log_id, filename in cursor.fetchall():
+        log_filename = os.path.join(logs_dir, filename)
+        level_filename = os.path.join(logs_dir, filename + ".levels")
+        if os.path.exists(log_filename) and os.path.exists(level_filename) and not log_filename.endswith(".gz"):
+            compress_file(log_filename)
+            compress_file(level_filename)
+            update_cursor.execute("UPDATE bitten_log SET filename=%s WHERE id=%s", (filename + ".gz", log_id))
+            env.log.info("Compressed log %s", log_id)
+            os.remove(log_filename)
+            os.remove(level_filename)
+        else:
+            env.log.info("Skipped log %s", log_id)
+
+    cursor.close()
+    update_cursor.close()
 
 map = {
     2: [add_log_table],
@@ -633,4 +665,5 @@ map = {
    10: [add_config_platform_rev_index_to_build, fix_sequences],
    11: [fix_log_levels_misnaming, remove_stray_log_levels_files],
    12: [add_last_activity_to_build],
+   13: [compress_logs]
 }
