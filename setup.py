@@ -93,7 +93,8 @@ class MasterFeature(Feature):
                     'bitten.testing = bitten.report.testing',
                     'bitten.coverage = bitten.report.coverage',
                     'bitten.lint = bitten.report.lint',
-                    'bitten.notify = bitten.notify']
+                    'bitten.notify = bitten.notify',
+                    'bitten.xmlrpc = bitten.xmlrpc']
 
 master = MasterFeature(
     description = "Bitten Master Trac plugin",
