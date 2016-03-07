@@ -121,7 +121,7 @@ ORDER BY item_name.value""", (build.id, step.name))
             if loc:
                 d = {'name': unit, 'loc': loc, 'cov': int(cov)}
                 if file:
-                    d['href'] = req.href.browser(config.path, file, rev=build.rev, annotate='coverage')
+                    d['href'] = req.href.browser(config.paths[0], file, rev=build.rev, annotate='coverage')
                 units.append(d)
                 total_loc += loc
                 total_cov += loc * cov
@@ -149,7 +149,7 @@ class TestCoverageAnnotator(Component):
     >>> repos = Mock(get_changeset=lambda x: Mock(date=to_datetime(12345, utc)))
     >>> env.get_repository = lambda: repos
 
-    >>> BuildConfig(env, name='trunk', path='trunk').insert()
+    >>> BuildConfig(env, name='trunk', paths=['trunk']).insert()
     >>> Build(env, rev=123, config='trunk', rev_time=12345, platform=1).insert()
     >>> rpt = Report(env, build=1, step='test', category='coverage')
     >>> rpt.items.append({'file': 'foo.py', 'line_hits': '5 - 0'})

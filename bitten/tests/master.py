@@ -59,7 +59,7 @@ class BuildMasterTestCase(unittest.TestCase):
         shutil.rmtree(self.env.path)
 
     def test_create_build(self):
-        BuildConfig(self.env, 'test', path='somepath', active=True).insert()
+        BuildConfig(self.env, 'test', paths=['somepath'], active=True).insert()
         platform = TargetPlatform(self.env, config='test', name="Unix")
         platform.rules.append(('family', 'posix'))
         platform.insert()
@@ -231,7 +231,7 @@ class BuildMasterTestCase(unittest.TestCase):
                             outbody.getvalue())
 
     def test_cancel_build(self):
-        config = BuildConfig(self.env, 'test', path='somepath', active=True,
+        config = BuildConfig(self.env, 'test', paths=['somepath'], active=True,
                              recipe='<build></build>')
         config.insert()
         build = Build(self.env, 'test', '123', 1, slave='hal', rev_time=42,
@@ -263,7 +263,7 @@ class BuildMasterTestCase(unittest.TestCase):
         assert not build.started
 
     def test_initiate_build(self):
-        config = BuildConfig(self.env, 'test', path='somepath', active=True,
+        config = BuildConfig(self.env, 'test', paths=['somepath'], active=True,
                              recipe='<build><step id="s1"></step></build>')
         config.insert()
         platform = TargetPlatform(self.env, config='test', name="Unix")
@@ -327,7 +327,7 @@ class BuildMasterTestCase(unittest.TestCase):
         self.assertEquals('No such build (123)', outbody.getvalue())
 
     def test_process_unknown_collection(self):
-        BuildConfig(self.env, 'test', path='somepath', active=True,
+        BuildConfig(self.env, 'test', paths=['somepath'], active=True,
                     recipe='<build></build>').insert()
         build = Build(self.env, 'test', '123', 1, slave='hal', rev_time=42)
         build.insert()
@@ -356,7 +356,7 @@ class BuildMasterTestCase(unittest.TestCase):
   <step id="foo">
   </step>
 </build>"""
-        BuildConfig(self.env, 'test', path='somepath', active=True,
+        BuildConfig(self.env, 'test', paths=['somepath'], active=True,
                     recipe=recipe).insert()
         build = Build(self.env, 'test', '123', 1, slave='hal', rev_time=42,
                       started=42, status=Build.IN_PROGRESS)
@@ -407,7 +407,7 @@ class BuildMasterTestCase(unittest.TestCase):
   <step id="foo">
   </step>
 </build>"""
-        BuildConfig(self.env, 'test', path='somepath', active=True,
+        BuildConfig(self.env, 'test', paths=['somepath'], active=True,
                     recipe=recipe).insert()
         build = Build(self.env, 'test', '123', 1, slave='hal', rev_time=42,
                       started=42, status=Build.IN_PROGRESS)
@@ -470,7 +470,7 @@ class BuildMasterTestCase(unittest.TestCase):
   <step id="foo">
   </step>
 </build>"""
-        BuildConfig(self.env, 'test', path='somepath', active=True,
+        BuildConfig(self.env, 'test', paths=['somepath'], active=True,
                     recipe=recipe).insert()
         build = Build(self.env, 'test', '123', 1, slave='hal', rev_time=42,
                       started=42, status=Build.IN_PROGRESS)
@@ -540,7 +540,7 @@ class BuildMasterTestCase(unittest.TestCase):
   <step id="foo">
   </step>
 </build>"""
-        BuildConfig(self.env, 'test', path='somepath', active=True,
+        BuildConfig(self.env, 'test', paths=['somepath'], active=True,
                     recipe=recipe).insert()
         build = Build(self.env, 'test', '123', 1, slave='hal', rev_time=42,
                       started=42, status=Build.IN_PROGRESS)
@@ -593,7 +593,7 @@ class BuildMasterTestCase(unittest.TestCase):
   <step id="foo2">
   </step>
 </build>"""
-        BuildConfig(self.env, 'test', path='somepath', active=True,
+        BuildConfig(self.env, 'test', paths=['somepath'], active=True,
                     recipe=recipe).insert()
         build = Build(self.env, 'test', '123', 1, slave='hal', rev_time=42,
                       started=42, status=Build.IN_PROGRESS)
@@ -685,7 +685,7 @@ class BuildMasterTestCase(unittest.TestCase):
   <step id="foo">
   </step>
 </build>"""
-        BuildConfig(self.env, 'test', path='somepath', active=True,
+        BuildConfig(self.env, 'test', paths=['somepath'], active=True,
                     recipe=recipe).insert()
         build = Build(self.env, 'test', '123', 1, slave='hal', rev_time=42,
                       started=42, status=Build.IN_PROGRESS)
@@ -736,7 +736,7 @@ class BuildMasterTestCase(unittest.TestCase):
   <step id="foo" onerror="ignore">
   </step>
 </build>"""
-        BuildConfig(self.env, 'test', path='somepath', active=True,
+        BuildConfig(self.env, 'test', paths=['somepath'], active=True,
                     recipe=recipe).insert()
         build = Build(self.env, 'test', '123', 1, slave='hal', rev_time=42,
                       started=42, status=Build.IN_PROGRESS)
@@ -789,7 +789,7 @@ class BuildMasterTestCase(unittest.TestCase):
   <step id="foo" onerror="continue">
   </step>
 </build>"""
-        BuildConfig(self.env, 'test', path='somepath', active=True,
+        BuildConfig(self.env, 'test', paths=['somepath'], active=True,
                     recipe=recipe).insert()
         build = Build(self.env, 'test', '123', 1, slave='hal', rev_time=42,
                       started=42, status=Build.IN_PROGRESS)
@@ -841,7 +841,7 @@ class BuildMasterTestCase(unittest.TestCase):
   <step id="foo">
   </step>
 </build>"""
-        BuildConfig(self.env, 'test', path='somepath', active=True,
+        BuildConfig(self.env, 'test', paths=['somepath'], active=True,
                     recipe=recipe).insert()
         build = Build(self.env, 'test', '123', 1, slave='hal', rev_time=42,
                       started=42)
@@ -873,7 +873,7 @@ class BuildMasterTestCase(unittest.TestCase):
 
 
     def test_process_build_step_no_post(self):
-        BuildConfig(self.env, 'test', path='somepath', active=True,
+        BuildConfig(self.env, 'test', paths=['somepath'], active=True,
                     recipe='<build></build>').insert()
         build = Build(self.env, 'test', '123', 1, slave='hal', rev_time=42,
                       started=42)
@@ -948,7 +948,7 @@ class BuildMasterTestCase(unittest.TestCase):
                 send_header=lambda x, y: outheaders.setdefault(x, y),
                 write=outbody.write)
 
-        config = BuildConfig(self.env, 'test', path='somepath', active=True,
+        config = BuildConfig(self.env, 'test', paths=['somepath'], active=True,
                     recipe='')
         config.insert()
         build = Build(self.env, 'test', '123', 1, slave='hal', rev_time=42,
@@ -999,7 +999,7 @@ class BuildMasterTestCase(unittest.TestCase):
                 send_header=lambda x, y: outheaders.setdefault(x, y),
                 write=outbody.write)
 
-        config = BuildConfig(self.env, 'test', path='somepath', active=True,
+        config = BuildConfig(self.env, 'test', paths=['somepath'], active=True,
                     recipe='')
         config.insert()
         build = Build(self.env, 'test', '123', 1, slave='hal', rev_time=42,

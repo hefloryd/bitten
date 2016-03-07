@@ -33,7 +33,7 @@ class BuildConfig(object):
         ]
     ]
 
-    def __init__(self, env, name=None, path=None, active=False, recipe=None,
+    def __init__(self, env, name=None, paths=[], active=False, recipe=None,
                  min_rev=None, max_rev=None, label=None, description=None):
         """Initialize a new build configuration with the specified attributes.
 
@@ -43,7 +43,7 @@ class BuildConfig(object):
         self.env = env
         self._old_name = None
         self.name = name
-        self.path = path or ''
+        self.paths = paths
         self.active = bool(active)
         self.recipe = recipe or ''
         self.min_rev = min_rev or None
@@ -99,7 +99,7 @@ class BuildConfig(object):
         cursor.execute("INSERT INTO bitten_config (name,path,active,"
                        "recipe,min_rev,max_rev,label,description) "
                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-                       (self.name, self.path, int(self.active or 0),
+                       (self.name, '\n'.join(self.paths), int(self.active or 0),
                         self.recipe or '', self.min_rev, self.max_rev,
                         self.label or '', self.description or ''))
 
@@ -121,7 +121,7 @@ class BuildConfig(object):
         cursor.execute("UPDATE bitten_config SET name=%s,path=%s,active=%s,"
                        "recipe=%s,min_rev=%s,max_rev=%s,label=%s,"
                        "description=%s WHERE name=%s",
-                       (self.name, self.path, int(self.active or 0),
+                       (self.name, '\n'.join(self.paths), int(self.active or 0),
                         self.recipe, self.min_rev, self.max_rev,
                         self.label, self.description, self._old_name))
         if self.name != self._old_name:
@@ -150,7 +150,7 @@ class BuildConfig(object):
 
         config = BuildConfig(env)
         config.name = config._old_name = name
-        config.path = row[0] or ''
+        config.paths = (row[0] or '').split('\n')
         config.active = bool(row[1])
         config.recipe = row[2] or ''
         config.min_rev = row[3] or None
@@ -178,7 +178,7 @@ class BuildConfig(object):
                            "WHERE active=1 ORDER BY name")
         for name, path, active, recipe, min_rev, max_rev, label, description \
                 in cursor:
-            config = BuildConfig(env, name=name, path=path or '',
+            config = BuildConfig(env, name=name, paths=(path or '').split('\n'),
                                  active=bool(active), recipe=recipe or '',
                                  min_rev=min_rev or None,
                                  max_rev=max_rev or None, label=label or '',

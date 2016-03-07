@@ -7,9 +7,10 @@
   <xi:include href="admin.html" />
   <head>
     <title>Manage Build Configurations</title>
+    <script type="text/javascript" src="${req.href.chrome('bitten', 'multisuggest.js')}"></script>
     <script type="text/javascript">
       jQuery(document).ready(function($) {
-        $("input[name='path']").suggest("${href.diff()}");
+        $("textarea[name='paths']").multisuggest("${href.diff()}");
       });
     </script>
   </head>
@@ -51,9 +52,13 @@
       <fieldset id="repos">
         <legend>Repository Mapping</legend>
         <table class="form" summary=""><tr>
-          <th><label for="path">Path:</label></th>
-          <td colspan="3"><input id="path" type="text" name="path"
-              size="48" value="$config.path" /></td>
+          <th><label for="path">Paths:</label></th>
+          <td colspan="4"><fieldset class="iefix">
+          <label for="paths">Paths (all entries trigger a build, the first entry is used for the $${path} property):</label>
+          <p>
+              <textarea id="paths" type="text" name="paths" rows="8" cols="48">${'\n'.join(config.paths)}</textarea>
+          </p>
+        </fieldset></td>
         </tr><tr>
           <th><label for="min_rev">
             First revision:
@@ -205,8 +210,8 @@
         </label></div></td>
       </tr><tr>
         <td class="path" colspan="2"><div class="field">
-          <label>Path:<br />
-            <input type="text" name="path" size="32" />
+          <label>Paths (all entries trigger a build, the first entry is used for the $${path} property):<br />
+            <textarea type="text" name="paths" rows="8" cols="32" />
           </label>
         </div></td>
       </tr></table>
@@ -219,7 +224,7 @@
       <table class="listing" id="configlist">
         <thead>
           <tr><th class="sel">&nbsp;</th><th>Name</th>
-          <th>Path</th><th>Active</th></tr>
+          <th>Paths</th><th>Active</th></tr>
         </thead><tbody>
         <tr py:if="not configs">
           <td colspan="4"><em>(No Build Configurations)</em></td>
@@ -232,7 +237,9 @@
           <td class="name">
             <a href="$config.href">$config.label</a>
           </td>
-          <td class="path"><code>$config.path</code></td>
+          <td class="path"><code>
+              <py:for each="path in config.paths">${path}<br /></py:for>
+          </code></td>
           <td class="active">
             <input py:if="config.recipe"
                    type="checkbox" name="active"

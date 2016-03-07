@@ -255,7 +255,7 @@ class BuildMaster(Component):
             listener.build_started(build)
 
         xml = xmlio.parse(config.recipe)
-        xml.attr['path'] = config.path
+        xml.attr['path'] = config.paths[0]
         xml.attr['revision'] = build.rev
         xml.attr['config'] = config.name
         xml.attr['build'] = str(build.id)

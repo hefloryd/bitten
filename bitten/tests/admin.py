@@ -177,9 +177,9 @@ class BuildConfigurationsAdminPageProviderTestCase(unittest.TestCase):
         self.assertEqual([], data['configs'])
 
     def test_process_view_configs(self):
-        BuildConfig(self.env, name='foo', label='Foo', path='branches/foo',
+        BuildConfig(self.env, name='foo', label='Foo', paths=['branches/foo'],
                     active=True).insert()
-        BuildConfig(self.env, name='bar', label='Bar', path='branches/bar',
+        BuildConfig(self.env, name='bar', label='Bar', paths=['branches/bar'],
                     min_rev='123', max_rev='456').insert()
 
         req = Mock(method='GET', chrome={}, href=Href('/'),
@@ -197,16 +197,16 @@ class BuildConfigurationsAdminPageProviderTestCase(unittest.TestCase):
         self.assertEqual({
             'name': 'bar', 'href': '/admin/bitten/configs/bar',
             'label': 'Bar', 'min_rev': '123', 'max_rev': '456',
-            'path': 'branches/bar', 'active': False, 'recipe': False
+            'paths': ['branches/bar'], 'active': False, 'recipe': False
         }, configs[0])
         self.assertEqual({
             'name': 'foo', 'href': '/admin/bitten/configs/foo',
             'label': 'Foo', 'min_rev': None, 'max_rev': None,
-            'path': 'branches/foo', 'active': True, 'recipe': False
+            'paths': ['branches/foo'], 'active': True, 'recipe': False
         }, configs[1])
 
     def test_process_view_config(self):
-        BuildConfig(self.env, name='foo', label='Foo', path='branches/foo',
+        BuildConfig(self.env, name='foo', label='Foo', paths=['branches/foo'],
                     active=True).insert()
         TargetPlatform(self.env, config='foo', name='any').insert()
 
@@ -223,7 +223,7 @@ class BuildConfigurationsAdminPageProviderTestCase(unittest.TestCase):
         config = data['config']
         self.assertEqual({
             'name': 'foo', 'label': 'Foo', 'description': '', 'recipe': '',
-            'path': 'branches/foo', 'min_rev': None, 'max_rev': None,
+            'paths': ['branches/foo'], 'min_rev': None, 'max_rev': None,
             'active': True, 'platforms': [{
                 'href': '/admin/bitten/configs/foo/1',
                 'name': 'any', 'id': 1, 'rules': []
@@ -231,8 +231,8 @@ class BuildConfigurationsAdminPageProviderTestCase(unittest.TestCase):
         }, config)
 
     def test_process_activate_config(self):
-        BuildConfig(self.env, name='foo', path='branches/foo').insert()
-        BuildConfig(self.env, name='bar', path='branches/bar').insert()
+        BuildConfig(self.env, name='foo', paths=['branches/foo']).insert()
+        BuildConfig(self.env, name='bar', paths=['branches/bar']).insert()
 
         redirected_to = []
         def redirect(url):
@@ -255,9 +255,9 @@ class BuildConfigurationsAdminPageProviderTestCase(unittest.TestCase):
             self.assertEqual(True, config.active)
 
     def test_process_deactivate_config(self):
-        BuildConfig(self.env, name='foo', path='branches/foo',
+        BuildConfig(self.env, name='foo', paths=['branches/foo'],
                     active=True).insert()
-        BuildConfig(self.env, name='bar', path='branches/bar',
+        BuildConfig(self.env, name='bar', paths=['branches/bar'],
                     active=True).insert()
 
         redirected_to = []
@@ -283,7 +283,7 @@ class BuildConfigurationsAdminPageProviderTestCase(unittest.TestCase):
             self.assertEqual(False, config.active)
 
     def test_process_add_config(self):
-        BuildConfig(self.env, name='foo', label='Foo', path='branches/foo',
+        BuildConfig(self.env, name='foo', label='Foo', paths=['branches/foo'],
                     active=True).insert()
 
         redirected_to = []
@@ -358,7 +358,7 @@ class BuildConfigurationsAdminPageProviderTestCase(unittest.TestCase):
     def test_new_config_submit_with_invalid_path(self):
         req = Mock(method='POST', perm=PermissionCache(self.env, 'joe'),
                    authname='joe',
-                   args={'add': '', 'name': 'foo', 'path': 'invalid/path'})
+                   args={'add': '', 'name': 'foo', 'paths': 'invalid/path'})
 
         def get_node(path, rev=None):
             raise TracError('No such node')
@@ -373,7 +373,7 @@ class BuildConfigurationsAdminPageProviderTestCase(unittest.TestCase):
             self.failUnless('Invalid Repository Path' in e.message)
 
     def test_process_add_config_no_perms(self):
-        BuildConfig(self.env, name='foo', label='Foo', path='branches/foo',
+        BuildConfig(self.env, name='foo', label='Foo', paths=['branches/foo'],
                     active=True).insert()
         PermissionSystem(self.env).revoke_permission('joe', 'BUILD_CREATE')
 
@@ -386,9 +386,9 @@ class BuildConfigurationsAdminPageProviderTestCase(unittest.TestCase):
                           'bitten', 'configs', '')
 
     def test_process_remove_config(self):
-        BuildConfig(self.env, name='foo', label='Foo', path='branches/foo',
+        BuildConfig(self.env, name='foo', label='Foo', paths=['branches/foo'],
                     active=True).insert()
-        BuildConfig(self.env, name='bar', label='Bar', path='branches/bar',
+        BuildConfig(self.env, name='bar', label='Bar', paths=['branches/bar'],
                     min_rev='123', max_rev='456').insert()
 
         redirected_to = []
@@ -410,9 +410,9 @@ class BuildConfigurationsAdminPageProviderTestCase(unittest.TestCase):
             assert not BuildConfig.fetch(self.env, name='bar')
 
     def test_process_remove_config_cancel(self):
-        BuildConfig(self.env, name='foo', label='Foo', path='branches/foo',
+        BuildConfig(self.env, name='foo', label='Foo', paths=['branches/foo'],
                     active=True).insert()
-        BuildConfig(self.env, name='bar', label='Bar', path='branches/bar',
+        BuildConfig(self.env, name='bar', label='Bar', paths=['branches/bar'],
                     min_rev='123', max_rev='456').insert()
 
         redirected_to = []
@@ -435,7 +435,7 @@ class BuildConfigurationsAdminPageProviderTestCase(unittest.TestCase):
             self.assertEqual(2, len(configs))
 
     def test_process_remove_config_no_selection(self):
-        BuildConfig(self.env, name='foo', label='Foo', path='branches/foo',
+        BuildConfig(self.env, name='foo', label='Foo', paths=['branches/foo'],
                     active=True).insert()
 
         req = Mock(method='POST', perm=PermissionCache(self.env, 'joe'),
@@ -450,7 +450,7 @@ class BuildConfigurationsAdminPageProviderTestCase(unittest.TestCase):
             self.assertEqual('No configuration selected', e.message)
 
     def test_process_remove_config_bad_selection(self):
-        BuildConfig(self.env, name='foo', label='Foo', path='branches/foo',
+        BuildConfig(self.env, name='foo', label='Foo', paths=['branches/foo'],
                     active=True).insert()
 
         req = Mock(method='POST', perm=PermissionCache(self.env, 'joe'),
@@ -465,7 +465,7 @@ class BuildConfigurationsAdminPageProviderTestCase(unittest.TestCase):
             self.assertEqual("Configuration 'baz' not found", e.message)
 
     def test_process_remove_config_no_perms(self):
-        BuildConfig(self.env, name='foo', label='Foo', path='branches/foo',
+        BuildConfig(self.env, name='foo', label='Foo', paths=['branches/foo'],
                     active=True).insert()
         PermissionSystem(self.env).revoke_permission('joe', 'BUILD_DELETE')
 
@@ -478,7 +478,7 @@ class BuildConfigurationsAdminPageProviderTestCase(unittest.TestCase):
                           'bitten', 'configs', '')
 
     def test_process_update_config(self):
-        BuildConfig(self.env, name='foo', label='Foo', path='branches/foo',
+        BuildConfig(self.env, name='foo', label='Foo', paths=['branches/foo'],
                     active=True).insert()
 
         redirected_to = []
@@ -506,7 +506,7 @@ class BuildConfigurationsAdminPageProviderTestCase(unittest.TestCase):
             self.assertEqual('Thanks for all the fish!', config.description)
 
     def test_process_update_config_no_name(self):
-        BuildConfig(self.env, name='foo', label='Foo', path='branches/foo',
+        BuildConfig(self.env, name='foo', label='Foo', paths=['branches/foo'],
                     active=True).insert()
 
         req = Mock(method='POST', perm=PermissionCache(self.env, 'joe'),
@@ -521,7 +521,7 @@ class BuildConfigurationsAdminPageProviderTestCase(unittest.TestCase):
                             req.chrome['warnings'])
 
     def test_process_update_config_invalid_name(self):
-        BuildConfig(self.env, name='foo', label='Foo', path='branches/foo',
+        BuildConfig(self.env, name='foo', label='Foo', paths=['branches/foo'],
                     active=True).insert()
 
         req = Mock(method='POST', perm=PermissionCache(self.env, 'joe'),
@@ -537,12 +537,12 @@ class BuildConfigurationsAdminPageProviderTestCase(unittest.TestCase):
                         'only contain letters, digits, periods, or dashes.'])
 
     def test_process_update_config_invalid_path(self):
-        BuildConfig(self.env, name='foo', label='Foo', path='branches/foo',
+        BuildConfig(self.env, name='foo', label='Foo', paths=['branches/foo'],
                     active=True).insert()
 
         req = Mock(method='POST', perm=PermissionCache(self.env, 'joe'),
                    authname='joe', chrome={'warnings': []}, href=Href('/'),
-                   args={'save': '', 'name': 'foo', 'path': 'invalid/path'})
+                   args={'save': '', 'name': 'foo', 'paths': 'invalid/path'})
 
         def get_node(path, rev=None):
             raise TracError('No such node')
@@ -557,7 +557,7 @@ class BuildConfigurationsAdminPageProviderTestCase(unittest.TestCase):
                      'within the "(default)" repository.'])
 
     def test_process_update_config_non_wellformed_recipe(self):
-        BuildConfig(self.env, name='foo', label='Foo', path='branches/foo',
+        BuildConfig(self.env, name='foo', label='Foo', paths=['branches/foo'],
                     active=True).insert()
 
         req = Mock(method='POST', perm=PermissionCache(self.env, 'joe'),
@@ -572,7 +572,7 @@ class BuildConfigurationsAdminPageProviderTestCase(unittest.TestCase):
                         'column 0.'], req.chrome['warnings'])
 
     def test_process_update_config_invalid_recipe(self):
-        BuildConfig(self.env, name='foo', label='Foo', path='branches/foo',
+        BuildConfig(self.env, name='foo', label='Foo', paths=['branches/foo'],
                     active=True).insert()
 
         req = Mock(method='POST', perm=PermissionCache(self.env, 'joe'),
@@ -588,7 +588,7 @@ class BuildConfigurationsAdminPageProviderTestCase(unittest.TestCase):
                     ['Invalid Recipe: Steps must have an "id" attribute.'])
 
     def test_process_new_platform_no_name(self):
-        BuildConfig(self.env, name='foo', label='Foo', path='branches/foo',
+        BuildConfig(self.env, name='foo', label='Foo', paths=['branches/foo'],
                     active=True).insert()
 
         data = {}
@@ -605,7 +605,7 @@ class BuildConfigurationsAdminPageProviderTestCase(unittest.TestCase):
             self.assertEquals(e.title, 'Missing field')
 
     def test_process_new_platform(self):
-        BuildConfig(self.env, name='foo', label='Foo', path='branches/foo',
+        BuildConfig(self.env, name='foo', label='Foo', paths=['branches/foo'],
                     active=True).insert()
 
         redirected_to = []
@@ -631,7 +631,7 @@ class BuildConfigurationsAdminPageProviderTestCase(unittest.TestCase):
             self.assertEqual([], platforms[0].rules)
 
     def test_process_remove_platforms(self):
-        BuildConfig(self.env, name='foo', label='Foo', path='branches/foo',
+        BuildConfig(self.env, name='foo', label='Foo', paths=['branches/foo'],
                     active=True).insert()
         platform = TargetPlatform(self.env, config='foo', name='any')
         platform.insert()
@@ -660,7 +660,7 @@ class BuildConfigurationsAdminPageProviderTestCase(unittest.TestCase):
             self.assertEqual(0, len(platforms))
 
     def test_process_remove_platforms_no_selection(self):
-        BuildConfig(self.env, name='foo', label='Foo', path='branches/foo',
+        BuildConfig(self.env, name='foo', label='Foo', paths=['branches/foo'],
                     active=True).insert()
         platform = TargetPlatform(self.env, config='foo', name='any')
         platform.insert()
@@ -683,7 +683,7 @@ class BuildConfigurationsAdminPageProviderTestCase(unittest.TestCase):
             self.assertEqual('No platform selected', e.message)
 
     def test_process_edit_platform(self):
-        BuildConfig(self.env, name='foo', label='Foo', path='branches/foo',
+        BuildConfig(self.env, name='foo', label='Foo', paths=['branches/foo'],
                     active=True).insert()
         platform = TargetPlatform(self.env, config='foo', name='any')
         platform.insert()
@@ -704,7 +704,7 @@ class BuildConfigurationsAdminPageProviderTestCase(unittest.TestCase):
         }, platform)
 
     def test_process_update_platform(self):
-        BuildConfig(self.env, name='foo', label='Foo', path='branches/foo',
+        BuildConfig(self.env, name='foo', label='Foo', paths=['branches/foo'],
                     active=True).insert()
         platform = TargetPlatform(self.env, config='foo', name='any')
         platform.insert()
@@ -734,7 +734,7 @@ class BuildConfigurationsAdminPageProviderTestCase(unittest.TestCase):
             self.assertEqual([('family', 'posix')], platforms[0].rules)
 
     def test_process_update_platform_cancel(self):
-        BuildConfig(self.env, name='foo', label='Foo', path='branches/foo',
+        BuildConfig(self.env, name='foo', label='Foo', paths=['branches/foo'],
                     active=True).insert()
         platform = TargetPlatform(self.env, config='foo', name='any')
         platform.insert()

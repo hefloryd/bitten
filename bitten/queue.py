@@ -48,46 +48,55 @@ def collect_changes(repos, config, db=None):
     env = config.env
     if not db:
         db = env.get_db_cnx()
-    try:
-        node = repos.get_node(config.path, config.max_rev)
-    except Exception, e:
-        env.log.warn('Error accessing path %r for configuration %r',
-                    config.path, config.name, exc_info=True)
-        return
-
-    for path, rev, chg in node.get_history():
-
-        # Don't follow moves/copies
-        if path != repos.normalize_path(config.path):
-            break
-
-        # Stay within the limits of the build config
-        if config.min_rev and repos.rev_older_than(rev, config.min_rev):
-            break
-        if config.max_rev and repos.rev_older_than(config.max_rev, rev):
+    # Find all build revisions for paths
+    revs = set()
+    for config_path in config.paths:
+        try:
+            node = repos.get_node(config_path, config.max_rev)
+        except Exception, e: 
+            env.log.warn('Error accessing path %r for configuration %r', 
+                        config_path, config.name, exc_info=True)
             continue
+        for path, rev, chg in node.get_history():
 
-        # Make sure the repository directory isn't empty at this
-        # revision
-        old_node = repos.get_node(path, rev)
-        is_empty = True
-        for entry in old_node.get_entries():
-            is_empty = False
-            break
-        if is_empty:
-            continue
+            # Don't reprocess revisions already found
+            if rev in revs:
+                continue;
 
-        # For every target platform, check whether there's a build
-        # of this revision
-        for platform in TargetPlatform.select(env, config.name, db=db):
-            builds = list(Build.select(env, config.name, rev, platform.id,
-                                       db=db))
-            if builds:
-                build = builds[0]
-            else:
-                build = None
+            # Don't follow moves/copies
+            if path != repos.normalize_path(path):
+                break
 
-            yield platform, rev, build
+            # Stay within the limits of the build config
+            if config.min_rev and repos.rev_older_than(rev, config.min_rev):
+                break
+            if config.max_rev and repos.rev_older_than(config.max_rev, rev):
+                continue
+
+            # Make sure the repository directory isn't empty at this
+            # revision
+            old_node = repos.get_node(path, rev)
+            is_empty = True
+            for entry in old_node.get_entries():
+                is_empty = False
+                break
+            if is_empty:
+                continue
+
+            # By this point, we have a build revision
+            revs.add(rev)
+
+    for rev in sorted(revs, reverse=True,  
+                      cmp=lambda a, b: -1 if repos.rev_older_than(a, b) else 1):  
+        for platform in TargetPlatform.select(env, config.name, db=db): 
+            builds = list(Build.select(env, config.name, rev, platform.id, 
+                                       db=db)) 
+            if builds: 
+                build = builds[0] 
+            else: 
+                build = None 
+ 
+            yield platform, rev, build 
 
 
 class BuildQueue(object):

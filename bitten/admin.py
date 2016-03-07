@@ -175,7 +175,7 @@ class BuildConfigurationsAdminPageProvider(Component):
                 # Prepare template variables
                 data['config'] = {
                     'name': config.name, 'label': config.label or config.name,
-                    'active': config.active, 'path': config.path,
+                    'active': config.active, 'paths': config.paths,
                     'min_rev': config.min_rev, 'max_rev': config.max_rev,
                     'description': config.description,
                     'recipe': config.recipe,
@@ -207,7 +207,7 @@ class BuildConfigurationsAdminPageProvider(Component):
             for config in BuildConfig.select(self.env, include_inactive=True):
                 configs.append({
                     'name': config.name, 'label': config.label or config.name,
-                    'active': config.active, 'path': config.path,
+                    'active': config.active, 'paths': config.paths,
                     'min_rev': config.min_rev, 'max_rev': config.max_rev,
                     'href': req.href.admin('bitten', 'configs', config.name),
                     'recipe': config.recipe and True or False
@@ -277,23 +277,28 @@ class BuildConfigurationsAdminPageProvider(Component):
         if not repos:
             warnings.append('No "(default)" Repository: Add a repository or '
                             'alias named "(default)" to Trac.')
-        path = req.args.get('path', '')
+        paths = filter(lambda s: len(s) > 0, [p.strip()
+                        for p in req.args.get('paths', '').split('\n')])
         min_rev = req.args.get('min_rev') or None
         max_rev = req.args.get('max_rev') or None
 
         if repos:
-            path = repos.normalize_path(path)
-            try:
-                node = repos.get_node(path, max_rev)
-                assert node.isdir, '%s is not a directory' % node.path
-            except (AssertionError, TracError), e:
-                warnings.append('Invalid Repository Path: "%s" does not exist '
-                                'within the "(default)" repository.' % path)
-            if min_rev:
+            paths = [repos.normalize_path(p) for p in paths]
+            for path in paths:
                 try:
-                    repos.get_node(path, min_rev)
-                except TracError, e:
-                    warnings.append('Invalid Oldest Revision: %s.' % unicode(e))
+                    node = repos.get_node(path, max_rev)
+                    assert node.isdir, '%s is not a directory' % node.path
+                except (AssertionError, TracError), e:
+                    warnings.append('Invalid Repository Path: "%s" does not '
+                                    'exist within the "(default)" repository.'
+                                    % path)
+            if min_rev:
+                for path in paths:
+                    try:
+                        repos.get_node(path, min_rev)
+                    except TracError, e:
+                        warnings.append('Invalid Oldest Revision: %s.'
+                                        % unicode(e))
 
         recipe_xml = req.args.get('recipe', '')
         if recipe_xml:
@@ -305,7 +310,7 @@ class BuildConfigurationsAdminPageProvider(Component):
                 warnings.append('Invalid Recipe: %s.' % unicode(e))
 
         config.name = name
-        config.path = path
+        config.paths = paths
         config.recipe = recipe_xml
         config.min_rev = min_rev
         config.max_rev = max_rev

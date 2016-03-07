@@ -81,18 +81,21 @@ def _get_build_data(env, req, build):
     }
     return data
 
-def _has_permission(perm, repos, path, rev=None, raise_error=False):
+def _has_permission(perm, repos, paths, rev=None, raise_error=False):
     if hasattr(repos, 'authz'):
-        if not repos.authz.has_permission(path):
-            if not raise_error:
-                return False
-            repos.authz.assert_permission(path)
+        for path in paths:
+            if not repos.authz.has_permission(path):
+                if not raise_error:
+                    return False
+                repos.authz.assert_permission(path)
     else:
-        node = repos.get_node(path, rev)
-        if not node.can_view(perm):
-            if not raise_error:
-                return False
-            raise PermissionError('BROWSER_VIEW', node.resource)
+        for path in paths:
+            node = repos.get_node(path, rev)
+            if not node.can_view(perm):
+                if not raise_error:
+                    return False
+                from trac.perm import PermissionError
+                raise PermissionError('BROWSER_VIEW', node.resource)
     return True
 
 class BittenChrome(Component):
@@ -221,12 +224,12 @@ class BuildConfigController(Component):
         for config in BuildConfig.select(self.env, include_inactive=show_all):
             rev = config.max_rev or repos.youngest_rev
             try:
-                if not _has_permission(req.perm, repos, config.path, rev=rev):
+                if not _has_permission(req.perm, repos, config.paths, rev=rev):
                     continue
             except NoSuchNode:
                 add_warning(req, "Configuration '%s' points to non-existing "
-                        "path '/%s' at revision '%s'. Configuration skipped." \
-                                    % (config.name, config.path, rev))
+                    "paths '/%s' at revision '%s'. Configuration skipped." \
+                        % (config.name, ",/".join(config.paths), rev))
                 continue
 
             description = config.description
@@ -248,7 +251,7 @@ class BuildConfigController(Component):
 
             config_data = {
                 'name': config.name, 'label': config.label or config.name,
-                'active': config.active, 'path': config.path,
+                'active': config.active, 'paths': config.paths,
                 'description': description,
                 'builds_pending' : len(list(Build.select(self.env,
                                                 config=config.name,
@@ -318,12 +321,12 @@ class BuildConfigController(Component):
         for config in BuildConfig.select(self.env, include_inactive=False):
             rev = config.max_rev or repos.youngest_rev
             try:
-                if not _has_permission(req.perm, repos, config.path, rev=rev):
+                if not _has_permission(req.perm, repos, config.paths, rev=rev):
                     continue
             except NoSuchNode:
                 add_warning(req, "Configuration '%s' points to non-existing "
-                        "path '/%s' at revision '%s'. Configuration skipped." \
-                                    % (config.name, config.path, rev))
+                    "paths '/%s' at revision '%s'. Configuration skipped." \
+                        % (config.name, ",/".join(config.paths), rev))
                 continue
 
             self.log.debug(config.name)
@@ -369,7 +372,7 @@ class BuildConfigController(Component):
                 description = wiki_to_html(description, self.env, req)
             configs.append({
                 'name': config.name, 'label': config.label or config.name,
-                'active': config.active, 'path': config.path,
+                'active': config.active, 'paths': config.paths,
                 'description': description,
                 'href': req.href.build(config.name),
                 'builds': builds
@@ -391,11 +394,11 @@ class BuildConfigController(Component):
                       'named "(default)" to Trac.'
         rev = config.max_rev or repos.youngest_rev
         try:
-            _has_permission(req.perm, repos, config.path, rev=rev,
+            _has_permission(req.perm, repos, config.paths, rev=rev,
                                                         raise_error=True)
         except NoSuchNode:
             raise TracError("Permission checking against repository path %s "
-                "at revision %s failed." % (config.path, rev))
+                "at revision %s failed." % (",".join(config.paths), rev))
 
         data = {'title': 'Build Configuration "%s"' \
                           % config.label or config.name,
@@ -411,13 +414,13 @@ class BuildConfigController(Component):
                                 config=config.name, status=Build.IN_PROGRESS))
 
         data['config'] = {
-            'name': config.name, 'label': config.label, 'path': config.path,
+            'name': config.name, 'label': config.label, 'paths': config.paths,
             'min_rev': config.min_rev,
             'min_rev_href': req.href.changeset(config.min_rev),
             'max_rev': config.max_rev,
             'max_rev_href': req.href.changeset(config.max_rev),
             'active': config.active, 'description': description,
-            'browser_href': req.href.browser(config.path),
+            'browser_href_prefix': req.href.browser('/'),
             'builds_pending' : len(pending_builds),
             'builds_inprogress' : len(inprogress_builds)
         }
@@ -625,7 +628,7 @@ class BuildController(Component):
         repos = self.env.get_repository(authname=req.authname)
         assert repos, 'No "(default)" Repository: Add a repository or alias ' \
                       'named "(default)" to Trac.'
-        _has_permission(req.perm, repos, config.path, rev=build.rev, raise_error=True)
+        _has_permission(req.perm, repos, config.paths, rev=build.rev, raise_error=True)
         chgset = repos.get_changeset(build.rev)
         data['build']['chgset_author'] = chgset.author
         data['build']['display_rev'] = repos.normalize_rev(build.rev)
@@ -674,7 +677,8 @@ class BuildController(Component):
                        Build.FAILURE: 'failedbuild'}
 
         for id_, config, label, path, rev, platform, stopped, status in cursor:
-            if not _has_permission(req.perm, repos, path, rev=rev):
+            paths = path.split('\n')
+            if not _has_permission(req.perm, repos, paths, rev=rev):
                 continue
             errors = []
             if status == Build.FAILURE:
@@ -814,7 +818,8 @@ class SourceFileLinkFormatter(Component):
 
     implements(ILogFormatter)
 
-    _fileref_re = re.compile(r'(?P<prefix>-[A-Za-z])?(?P<path>[\w.-]+(?:[\\/][\w.-]+)+)(?P<line>:\d+)?')
+    _fileref_re = re.compile(r'(?P<prefix>-[A-Za-z])?(?P<path>([A-Za-z]+\:)?[\\/\w.-]+)((:|, line )(?P<line>\d+))?((\#)(?P<revision>\d+))?')
+    _url_re = re.compile(r'(?P<scheme>[A-Za-z]+\:.*)')
 
     def get_formatter(self, req, build):
         """Return the log message formatter function."""
@@ -827,30 +832,49 @@ class SourceFileLinkFormatter(Component):
 
         def _replace(m):
             filepath = posixpath.normpath(m.group('path').replace('\\', '/'))
-            if not cache.get(filepath) is True:
-                parts = filepath.split('/')
-                path = ''
-                for part in parts:
-                    path = posixpath.join(path, part)
-                    if path not in cache:
+            if filepath not in cache:
+                # Check the suffixes of the path in order to avoid local prefixes
+                # e.g., where the local path is workspace/plugins/folder1/folder2/file
+                #       and the repository path is config_path/folder1/folder2/file
+                pathIndexes = [match.start() for match in re.finditer('/', filepath)];
+                if 0 not in pathIndexes:
+                    pathIndexes = [0] + pathIndexes
+                for pathIndex in reversed(pathIndexes):
+                    path = posixpath.normpath(filepath[pathIndex:])
+                    if path and path[0] == '/':
+                        path = path[1:]
+                    for config_path in config.paths:
                         try:
-                            full_path = posixpath.join(config.path, path)
-                            full_path = posixpath.normpath(full_path)
-                            if full_path.startswith(config.path + "/") \
-                                        or full_path == config.path:
-                                repos.get_node(full_path,
-                                               build.rev)
-                                cache[path] = True
+                            if path.startswith(config_path + "/") \
+                                or path == config_path:
+                                full_path = path
                             else:
-                                cache[path] = False
+                                full_path = posixpath.join(config_path, path)
+                                full_path = posixpath.normpath(full_path)
+                            if full_path.startswith(config_path + "/") \
+                                    or full_path == config_path:
+                                if repos.get_node(full_path, build.rev):
+                                    path = full_path[len(config_path):]
+                                    cache[filepath] = (config_path, path)
+                                    break # but continue searching for longer paths
                         except TracError:
-                            cache[path] = False
-                    if cache[path] is False:
-                        return m.group(0)
-            link = href(config.path, filepath)
-            if m.group('line'):
-                link += '#L' + m.group('line')[1:]
-            return Markup(tag.a(m.group(0), href=link))
+                            pass
+                if filepath not in cache:
+                    cache[filepath] = False
+
+            if filepath in cache and cache[filepath] is not False:
+                config_path, path = cache[filepath]
+                link = href(config_path, path)
+                link += '?rev=' + (m.group('revision') or build.rev)
+                if m.group('line'):
+                    link += '#L' + m.group('line')
+                return Markup(tag.a(m.group(0), href=link))
+
+            if self._url_re.match(m.group(0)):
+                if not m.group(0).startswith("file:"):
+                    return Markup(tag.a(m.group(0), href=m.group(0)))
+
+            return m.group(0)
 
         def _formatter(step, type, level, message):
             buf = []

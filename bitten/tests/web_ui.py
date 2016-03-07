@@ -73,7 +73,7 @@ class BuildConfigControllerTestCase(AbstractWebUITestCase):
         self.assertEqual('overview', data['page_mode'])
 
     def test_view_config(self):
-        config = BuildConfig(self.env, name='test', path='trunk')
+        config = BuildConfig(self.env, name='test', paths=['trunk'])
         config.insert()
         platform = TargetPlatform(self.env, config='test', name='any')
         platform.insert()
@@ -89,7 +89,8 @@ class BuildConfigControllerTestCase(AbstractWebUITestCase):
                                           range(123, 111, -1)])
         self.repos = Mock(get_node=lambda path, rev=None: root,
                           sync=lambda: None, normalize_path=lambda path: path,
-                          normalize_rev=lambda rev: rev, youngest_rev=123)
+                          normalize_rev=lambda rev: rev, youngest_rev=123, 
+                          rev_older_than=lambda rev1, rev2: rev1 < rev2)
         self.repos.authz = Mock(has_permission=lambda path: True, assert_permission=lambda path: None)
 
         module = BuildConfigController(self.env)
@@ -111,7 +112,7 @@ class BuildConfigControllerTestCase(AbstractWebUITestCase):
         # We must not assume that these revision numbers can be sorted later on,
         # for example the mercurial plugin will return the revisions as strings
         # (e.g. '880:4c19fa95fb9e')
-        config = BuildConfig(self.env, name='test', path='trunk')
+        config = BuildConfig(self.env, name='test', paths=['trunk'])
         config.insert()
         platform = TargetPlatform(self.env, config='test', name='any')
         platform.insert()
@@ -128,8 +129,10 @@ class BuildConfigControllerTestCase(AbstractWebUITestCase):
         root = Mock(get_entries=lambda: ['foo'], get_history=lambda: revision_list)
         self.repos = Mock(get_node=lambda path, rev=None: root,
                           sync=lambda: None, normalize_path=lambda path: path,
-                          normalize_rev=lambda rev: rev, youngest_rev=5)
-        self.repos.authz = Mock(has_permission=lambda path: True, assert_permission=lambda path: None)
+                          normalize_rev=lambda rev: rev, youngest_rev=5,
+                          rev_older_than=lambda rev1, rev2: rev1 < rev2)
+        self.repos.authz = Mock(has_permission=lambda path: True,
+                                assert_permission=lambda path: None)
 
         module = BuildConfigController(self.env)
         assert module.match_request(req)
@@ -139,7 +142,7 @@ class BuildConfigControllerTestCase(AbstractWebUITestCase):
         self.assertEquals(revision_ids, actual_revision_ids)
 
     def test_view_config_paging(self):
-        config = BuildConfig(self.env, name='test', path='trunk')
+        config = BuildConfig(self.env, name='test', paths=['trunk'])
         config.insert()
         platform = TargetPlatform(self.env, config='test', name='any')
         platform.insert()
@@ -148,6 +151,7 @@ class BuildConfigControllerTestCase(AbstractWebUITestCase):
         req = Mock(method='GET', base_path='', cgi_location='',
                    path_info='/build/test', href=Href('/trac'), args={},
                    chrome={}, authname='joe',
+                   rev_older_than=lambda rev1, rev2: rev1 < rev2,
                    perm=PermissionCache(self.env, 'joe'))
 
         root = Mock(get_entries=lambda: ['foo'],
@@ -155,7 +159,8 @@ class BuildConfigControllerTestCase(AbstractWebUITestCase):
                                           range(123, 110, -1)])
         self.repos = Mock(get_node=lambda path, rev=None: root,
                           sync=lambda: None, normalize_path=lambda path: path,
-                          normalize_rev=lambda rev: rev, youngest_rev=123)
+                          normalize_rev=lambda rev: rev, youngest_rev=123,
+                          rev_older_than=lambda rev1, rev2: rev1 < rev2)
         self.repos.authz = Mock(has_permission=lambda path: True, assert_permission=lambda path: None)
 
         module = BuildConfigController(self.env)
@@ -187,7 +192,7 @@ class BuildConfigControllerTestCase(AbstractWebUITestCase):
 class BuildControllerTestCase(AbstractWebUITestCase):
 
     def test_view_build(self):
-        config = BuildConfig(self.env, name='test', path='trunk')
+        config = BuildConfig(self.env, name='test', paths=['trunk'])
         config.insert()
         platform = TargetPlatform(self.env, config='test', name='any')
         platform.insert()
@@ -227,7 +232,7 @@ class BuildControllerTestCase(AbstractWebUITestCase):
     def test_raise_404(self):
         PermissionSystem(self.env).grant_permission('joe', 'BUILD_VIEW')
         module = BuildController(self.env)
-        config = BuildConfig(self.env, name='existing', path='trunk')
+        config = BuildConfig(self.env, name='existing', paths=['trunk'])
         config.insert()
         req = Mock(method='GET', base_path='', cgi_location='',
                    path_info='/build/existing/42', href=Href('/trac'), args={},
@@ -247,7 +252,7 @@ class BuildControllerTestCase(AbstractWebUITestCase):
 class SourceFileLinkFormatterTestCase(AbstractWebUITestCase):
 
     def test_format_simple_link_in_repos(self):
-        BuildConfig(self.env, name='test', path='trunk').insert()
+        BuildConfig(self.env, name='test', paths=['trunk']).insert()
         build = Build(self.env, config='test', platform=1, rev=123, rev_time=42,
                       status=Build.SUCCESS, slave='hal')
         build.insert()
@@ -255,7 +260,10 @@ class SourceFileLinkFormatterTestCase(AbstractWebUITestCase):
                          status=BuildStep.SUCCESS)
         step.insert()
 
-        self.repos.get_node = lambda path, rev: (path, rev)
+        def _raise():
+            raise TracError('No such node')
+        self.repos.get_node = lambda path, rev: \
+            (path, rev) if path in ['trunk/foo/bar.c', 'trunk/foo/win.c'] else _raise()
 
         req = Mock(method='GET', href=Href('/trac'), authname='hal')
         comp = SourceFileLinkFormatter(self.env)
@@ -264,16 +272,16 @@ class SourceFileLinkFormatterTestCase(AbstractWebUITestCase):
         # posix
         output = formatter(step, None, None, u'error in foo/bar.c: bad')
         self.assertEqual(Markup, type(output))
-        self.assertEqual('error in <a href="/trac/browser/trunk/foo/bar.c">'
+        self.assertEqual('error in <a href="/trac/browser/trunk/foo/bar.c?rev=123">'
                          'foo/bar.c</a>: bad', output)
         # windows
         output = formatter(step, None, None, u'error in foo\\win.c: bad')
         self.assertEqual(Markup, type(output))
-        self.assertEqual(r'error in <a href="/trac/browser/trunk/foo/win.c">'
+        self.assertEqual(r'error in <a href="/trac/browser/trunk/foo/win.c?rev=123">'
                          'foo\win.c</a>: bad', output)
 
     def test_format_bad_links(self):
-        BuildConfig(self.env, name='test', path='trunk').insert()
+        BuildConfig(self.env, name='test', paths=['trunk']).insert()
         build = Build(self.env, config='test', platform=1, rev=123, rev_time=42,
                       status=Build.SUCCESS, slave='hal')
         build.insert()
@@ -281,7 +289,9 @@ class SourceFileLinkFormatterTestCase(AbstractWebUITestCase):
                          status=BuildStep.SUCCESS)
         step.insert()
 
-        self.repos.get_node = lambda path, rev: (path, rev)
+        def _raise():
+            raise TracError('No such node')
+        self.repos.get_node = lambda path, rev: _raise()
 
         req = Mock(method='GET', href=Href('/trac'), authname='hal')
         comp = SourceFileLinkFormatter(self.env)
@@ -292,7 +302,7 @@ class SourceFileLinkFormatterTestCase(AbstractWebUITestCase):
         self.assertEqual('Linking -I../.. with ../libtool', output)
 
     def test_format_simple_link_not_in_repos(self):
-        BuildConfig(self.env, name='test', path='trunk').insert()
+        BuildConfig(self.env, name='test', paths=['trunk']).insert()
         build = Build(self.env, config='test', platform=1, rev=123, rev_time=42,
                       status=Build.SUCCESS, slave='hal')
         build.insert()
@@ -313,7 +323,7 @@ class SourceFileLinkFormatterTestCase(AbstractWebUITestCase):
         self.assertEqual('error in foo/bar.c: bad', output)
 
     def test_format_link_in_repos_with_line(self):
-        BuildConfig(self.env, name='test', path='trunk').insert()
+        BuildConfig(self.env, name='test', paths=['trunk']).insert()
         build = Build(self.env, config='test', platform=1, rev=123, rev_time=42,
                       status=Build.SUCCESS, slave='hal')
         build.insert()
@@ -321,25 +331,39 @@ class SourceFileLinkFormatterTestCase(AbstractWebUITestCase):
                          status=BuildStep.SUCCESS)
         step.insert()
 
-        self.repos.get_node = lambda path, rev: (path, rev)
+        def _raise():
+            raise TracError('No such node')
+        self.repos.get_node = lambda path, rev: (path, rev) \
+            if path in ['trunk/foo/bar.java', 'trunk/foo/win.java',
+                        'trunk/foo/bar.c', 'trunk/foo/win.c'] else _raise()
 
         req = Mock(method='GET', href=Href('/trac'), authname='hal')
         comp = SourceFileLinkFormatter(self.env)
         formatter = comp.get_formatter(req, build)
 
         # posix
-        output = formatter(step, None, None, u'error in foo/bar.c:123: bad')
+        output = formatter(step, None, None, u'error in foo/bar.c:124: bad')
         self.assertEqual(Markup, type(output))
-        self.assertEqual('error in <a href="/trac/browser/trunk/foo/bar.c#L123">'
-                         'foo/bar.c:123</a>: bad', output)
+        self.assertEqual('error in <a href="/trac/browser/trunk/foo/bar.c?rev=123#L124">'
+                         'foo/bar.c:124</a>: bad', output)
+        # posix
+        output = formatter(step, None, None, u'error in foo/bar.java, line 124: bad')
+        self.assertEqual(Markup, type(output))
+        self.assertEqual('error in <a href="/trac/browser/trunk/foo/bar.java?rev=123#L124">'
+                         'foo/bar.java, line 124</a>: bad', output)
         # windows
-        output = formatter(step, None, None, u'error in foo\\win.c:123: bad')
+        output = formatter(step, None, None, u'error in foo\\win.c:124: bad')
         self.assertEqual(Markup, type(output))
-        self.assertEqual(r'error in <a href="/trac/browser/trunk/foo/win.c#L123">'
-                         'foo\win.c:123</a>: bad', output)
+        self.assertEqual(r'error in <a href="/trac/browser/trunk/foo/win.c?rev=123#L124">'
+                         'foo\win.c:124</a>: bad', output)
+        # windows
+        output = formatter(step, None, None, u'error in foo\\win.java, line 124: bad')
+        self.assertEqual(Markup, type(output))
+        self.assertEqual(r'error in <a href="/trac/browser/trunk/foo/win.java?rev=123#L124">'
+                         'foo\win.java, line 124</a>: bad', output)
 
     def test_format_link_not_in_repos_with_line(self):
-        BuildConfig(self.env, name='test', path='trunk').insert()
+        BuildConfig(self.env, name='test', paths=['trunk']).insert()
         build = Build(self.env, config='test', platform=1, rev=123, rev_time=42,
                       status=Build.SUCCESS, slave='hal')
         build.insert()

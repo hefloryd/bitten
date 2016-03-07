@@ -62,7 +62,7 @@ class BuildConfigTestCase(BaseModelTestCase):
         config = BuildConfig.fetch(self.env, name='test')
         assert config.exists
         self.assertEqual('test', config.name)
-        self.assertEqual('trunk', config.path)
+        self.assertEqual(['trunk'], config.paths)
         self.assertEqual('Test', config.label)
         self.assertEqual(False, config.active)
 
@@ -75,7 +75,7 @@ class BuildConfigTestCase(BaseModelTestCase):
         self.assertRaises(StopIteration, configs.next)
 
     def test_insert(self):
-        config = BuildConfig(self.env, name='test', path='trunk', label='Test')
+        config = BuildConfig(self.env, name='test', paths=['trunk'], label='Test')
         config.insert()
 
         db = self.env.get_db_cnx()
@@ -95,7 +95,7 @@ class BuildConfigTestCase(BaseModelTestCase):
                        "VALUES (%s,%s,%s,%s)", ('test', 'trunk', 'Test', 0))
 
         config = BuildConfig.fetch(self.env, 'test')
-        config.path = 'some_branch'
+        config.paths = ['some_branch']
         config.label = 'Updated'
         config.active = True
         config.description = 'Bla bla bla'

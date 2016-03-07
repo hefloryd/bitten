@@ -125,7 +125,7 @@ class TestResultsSummarizerTestCase(unittest.TestCase):
                 cursor.execute(stmt)
 
     def test_testcase_errors_and_failures(self):
-        config = Mock(name='trunk', path='/somewhere', 
+        config = Mock(name='trunk', paths=['/somewhere'], 
                       min_rev_time=lambda env: 0, 
                       max_rev_time=lambda env: 1000)
         step = Mock(name='foo')

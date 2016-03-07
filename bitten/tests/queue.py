@@ -38,7 +38,7 @@ class CollectChangesTestCase(unittest.TestCase):
             for stmt in connector.to_sql(table):
                 cursor.execute(stmt)
 
-        self.config = BuildConfig(self.env, name='test', path='somepath')
+        self.config = BuildConfig(self.env, name='test', paths=['somepath'])
         self.config.insert(db=db)
         self.platform = TargetPlatform(self.env, config='test', name='Foo')
         self.platform.insert(db=db)
@@ -50,9 +50,10 @@ class CollectChangesTestCase(unittest.TestCase):
     def test_stop_on_copy(self):
         self.env.get_repository = lambda authname=None: Mock(
             get_node=lambda path, rev=None: Mock(
-                get_history=lambda: [('otherpath', 123, 'copy')]
+                get_history=lambda: [('somepath', 123, 'copy')],
+                rev_older_than=lambda rev1, rev2: rev1 < rev2
             ),
-            normalize_path=lambda path: path
+            normalize_path=lambda path: 'copiedpath'
         )
 
         retval = list(collect_changes(self.env.get_repository(), self.config))
@@ -211,7 +212,7 @@ class BuildQueueTestCase(unittest.TestCase):
             normalize_path=lambda path: path,
             rev_older_than=lambda rev1, rev2: rev1 < rev2
         )
-        BuildConfig(self.env, 'test', path='somepath', active=True).insert()
+        BuildConfig(self.env, 'test', paths=['somepath'], active=True).insert()
         platform1 = TargetPlatform(self.env, config='test', name='P1')
         platform1.insert()
         platform2 = TargetPlatform(self.env, config='test', name='P2')
@@ -242,7 +243,7 @@ class BuildQueueTestCase(unittest.TestCase):
             normalize_path=lambda path: path,
             rev_older_than=lambda rev1, rev2: rev1 < rev2
         )
-        BuildConfig(self.env, 'test', path='somepath', active=True).insert()
+        BuildConfig(self.env, 'test', paths=['somepath'], active=True).insert()
         platform1 = TargetPlatform(self.env, config='test', name='P1')
         platform1.insert()
         platform2 = TargetPlatform(self.env, config='test', name='P2')
@@ -269,6 +270,86 @@ class BuildQueueTestCase(unittest.TestCase):
         self.assertEqual(platform2.id, builds[5].platform)
         self.assertEqual('120', builds[5].rev)
 
+    def test_populate_not_build_all_multipath(self):
+        self.env.get_repository = lambda authname=None: Mock(
+            get_changeset=lambda rev: Mock(date=to_datetime(rev * 1000, utc)),
+            get_node=lambda path, rev=None: Mock(
+                get_entries=lambda: [Mock(), Mock()],
+                get_history=lambda: (filter(lambda h: h[0].startswith(path),
+                                     [('a/b/c', 123, 'edit'),
+                                     ('a/b/c', 121, 'edit'),
+                                     ('a/d/e', 120, 'edit'),
+                                     ('a/f/g', 119, 'edit'),
+                                     ('a/b/c', 118, 'edit')]))
+            ),
+            normalize_path=lambda path: path,
+            rev_older_than=lambda rev1, rev2: rev1 < rev2
+        )
+        BuildConfig(self.env, 'test', paths=['a/b','a/f'], active=True).insert()
+        platform1 = TargetPlatform(self.env, config='test', name='P1')
+        platform1.insert()
+        platform2 = TargetPlatform(self.env, config='test', name='P2')
+        platform2.insert()
+
+        queue = BuildQueue(self.env)
+        queue.populate()
+        queue.populate()
+        queue.populate()
+
+        builds = list(Build.select(self.env, config='test'))
+        self.assertEqual(2, len(builds))
+        builds.sort(lambda a, b: cmp(a.platform, b.platform))
+        self.assertEqual(platform1.id, builds[0].platform)
+        self.assertEqual('123', builds[0].rev)
+        self.assertEqual(platform2.id, builds[1].platform)
+        self.assertEqual('123', builds[1].rev)
+
+    def test_populate_build_all_multipath(self):
+        self.env.get_repository = lambda authname=None: Mock(
+            get_changeset=lambda rev: Mock(date=to_datetime(rev * 1000, utc)),
+            get_node=lambda path, rev=None: Mock(
+                get_entries=lambda: [Mock(), Mock()],
+                get_history=lambda: (filter(lambda h: h[0].startswith(path),
+                                     [('a/b/c', 123, 'edit'),
+                                     ('a/b/c', 121, 'edit'),
+                                     ('a/d/e', 120, 'edit'),
+                                     ('a/f/g', 119, 'edit'),
+                                     ('a/b/c', 118, 'edit')]))
+            ),
+            normalize_path=lambda path: path,
+            rev_older_than=lambda rev1, rev2: rev1 < rev2
+        )
+        BuildConfig(self.env, 'test', paths=['a/b','a/f'], active=True).insert()
+        platform1 = TargetPlatform(self.env, config='test', name='P1')
+        platform1.insert()
+        platform2 = TargetPlatform(self.env, config='test', name='P2')
+        platform2.insert()
+
+        queue = BuildQueue(self.env, build_all=True)
+        queue.populate()
+        queue.populate()
+        queue.populate()
+
+        builds = list(Build.select(self.env, config='test'))
+        self.assertEqual(8, len(builds))
+        builds.sort(lambda a, b: cmp(a.platform, b.platform))
+        self.assertEqual(platform1.id, builds[0].platform)
+        self.assertEqual('123', builds[0].rev)
+        self.assertEqual(platform1.id, builds[1].platform)
+        self.assertEqual('121', builds[1].rev)
+        self.assertEqual(platform1.id, builds[2].platform)
+        self.assertEqual('119', builds[2].rev)
+        self.assertEqual(platform1.id, builds[3].platform)
+        self.assertEqual('118', builds[3].rev)
+        self.assertEqual(platform2.id, builds[4].platform)
+        self.assertEqual('123', builds[4].rev)
+        self.assertEqual(platform2.id, builds[5].platform)
+        self.assertEqual('121', builds[5].rev)
+        self.assertEqual(platform2.id, builds[6].platform)
+        self.assertEqual('119', builds[6].rev)
+        self.assertEqual(platform2.id, builds[7].platform)
+        self.assertEqual('118', builds[7].rev)
+
     def test_populate_thread_race_condition(self):
         messages = []
         self.env.log = Mock(info=lambda msg, *args: messages.append(msg))
@@ -286,7 +367,7 @@ class BuildQueueTestCase(unittest.TestCase):
             normalize_path=lambda path: path,
             rev_older_than=lambda rev1, rev2: rev1 < rev2
         )
-        BuildConfig(self.env, 'test', path='somepath', active=True).insert()
+        BuildConfig(self.env, 'test', paths=['somepath'], active=True).insert()
         platform1 = TargetPlatform(self.env, config='test', name='P1')
         platform1.insert()
         platform2 = TargetPlatform(self.env, config='test', name='P2')

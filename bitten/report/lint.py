@@ -166,7 +166,7 @@ ORDER BY item_file.value, item_type.value""", (build.id, step.name))
             d['category'][category] += 1
 
             if file:
-                d['href'] = req.href.browser(config.path, file)
+                d['href'] = req.href.browser(config.paths[0], file)
 
             if not type_total.has_key(type):
                 type_total[type] = 0
